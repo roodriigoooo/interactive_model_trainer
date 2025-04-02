@@ -198,8 +198,47 @@ def load_dataset(dataset_name):
     if st.session_state.dataset is not None:
         numeric_cols, categorical_cols = identify_variable_types(st.session_state.dataset)
         st.session_state.features = {"numeric": numeric_cols, "categorical": categorical_cols}
+        st.session_state.original_features = {
+            "numeric": numeric_cols.copy(),
+            "categorical": categorical_cols.copy()
+        }
         # Save the current state
         save_session_state()
+
+def check_high_correlations(df, numeric_features, threshold=0.95):
+    """
+    Check for highly correlated features in the dataset.
+    
+    Parameters:
+    -----------
+    df : pandas.DataFrame
+        The input dataset
+    numeric_features : list
+        List of numeric feature names
+    threshold : float, default=0.95
+        Correlation threshold to consider features as highly correlated
+    
+    Returns:
+    --------
+    list of tuples
+        List of (feature1, feature2, correlation) for highly correlated pairs
+    """
+    if len(numeric_features) < 2:
+        return []
+        
+    corr_matrix = df[numeric_features].corr().abs()
+    high_corr_pairs = []
+    
+    # Get upper triangle of correlation matrix
+    upper = corr_matrix.where(np.triu(np.ones(corr_matrix.shape), k=1).astype(bool))
+    
+    # Find feature pairs with correlation above threshold
+    for col in upper.columns:
+        high_corr = upper[col][upper[col] > threshold]
+        for idx, corr_value in high_corr.items():
+            high_corr_pairs.append((col, idx, corr_value))
+    
+    return high_corr_pairs
 
 # Sidebar for dataset selection
 with st.sidebar:
@@ -288,21 +327,35 @@ if st.session_state.dataset is not None:
     # Data Exploration Tab
     with active_tab[1]:
         st.header("Data Exploration")
+
+        if "original_features" not in st.session_state:
+            st.session_state.original_features = {
+                "numeric": st.session_state.features["numeric"].copy(),
+                "categorical": st.session_state.features["categorical"].copy()
+            }
+        
+        high_corr_pairs = check_high_correlations(st.session_state.dataset, st.session_state.original_features["numeric"])
+        if high_corr_pairs:
+            st.warning("⚠️ High correlation detected between features:")
+            for feat1, feat2, corr in high_corr_pairs:
+                st.write(f"- '{feat1}' and '{feat2}' (correlation: {corr:.3f})")
+            st.write("Consider potential information leakage when selecting features and targets.")
+            st.write("---")
         
         # Correlation matrix for numeric features
-        if st.session_state.features["numeric"]:
+        if st.session_state.original_features["numeric"]:
             st.subheader("Correlation Matrix")
-            corr_fig = plot_correlation_matrix(st.session_state.dataset, st.session_state.features["numeric"])
+            corr_fig = plot_correlation_matrix(st.session_state.dataset, st.session_state.original_features["numeric"])
             st.pyplot(corr_fig)
         
         # Distribution of numeric features
-        if st.session_state.features["numeric"]:
+        if st.session_state.original_features["numeric"]:
             st.subheader("Numeric Feature Distributions")
             # Allow selecting which features to plot
             selected_numeric = st.multiselect(
                 "Select numeric features to visualize:",
-                options=st.session_state.features["numeric"],
-                default=st.session_state.features["numeric"][:min(5, len(st.session_state.features["numeric"]))]
+                options=st.session_state.original_features["numeric"],
+                default=st.session_state.original_features["numeric"][:min(5, len(st.session_state.original_features["numeric"]))]
             )
             
             if selected_numeric:
@@ -325,13 +378,13 @@ if st.session_state.dataset is not None:
                 st.pyplot(num_dist_fig)
         
         # Distribution of categorical features
-        if st.session_state.features["categorical"]:
+        if st.session_state.original_features["categorical"]:
             st.subheader("Categorical Feature Distributions")
             # Allow selecting which features to plot
             selected_categorical = st.multiselect(
                 "Select categorical features to visualize:",
-                options=st.session_state.features["categorical"],
-                default=st.session_state.features["categorical"][:min(5, len(st.session_state.features["categorical"]))]
+                options=st.session_state.original_features["categorical"],
+                default=st.session_state.original_features["categorical"][:min(5, len(st.session_state.original_features["categorical"]))]
             )
             
             if selected_categorical:
@@ -361,10 +414,10 @@ if st.session_state.dataset is not None:
         
         with col1:
             st.subheader("Numeric Features")
-            if st.session_state.features["numeric"]:
+            if st.session_state.original_features["numeric"]:
                 selected_numeric = st.multiselect(
                     "Select numeric features for modeling:",
-                    options=st.session_state.features["numeric"],
+                    options=st.session_state.original_features["numeric"],
                     default=st.session_state.features["numeric"]
                 )
                 st.session_state.features["numeric"] = selected_numeric
@@ -376,7 +429,7 @@ if st.session_state.dataset is not None:
             if st.session_state.features["categorical"]:
                 selected_categorical = st.multiselect(
                     "Select categorical features for modeling:",
-                    options=st.session_state.features["categorical"],
+                    options=st.session_state.original_features["categorical"],
                     default=st.session_state.features["categorical"]
                 )
                 st.session_state.features["categorical"] = selected_categorical
