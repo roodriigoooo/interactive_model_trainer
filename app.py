@@ -426,7 +426,7 @@ if st.session_state.dataset is not None:
         
         with col2:
             st.subheader("Categorical Features")
-            if st.session_state.features["categorical"]:
+            if st.session_state.original_features["categorical"]:
                 selected_categorical = st.multiselect(
                     "Select categorical features for modeling:",
                     options=st.session_state.original_features["categorical"],
