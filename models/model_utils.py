@@ -92,25 +92,10 @@ REGRESSION_MODELS = {
 def get_model_instance(model_name, is_classification=True):
     """
     Get an instance of the specified model.
-    
-    Parameters:
-    -----------
-    model_name : str
-        Name of the model to instantiate.
-    is_classification : bool, default=True
-        Whether the task is classification or regression.
-        
-    Returns:
-    --------
-    model : object
-        An instance of the specified model.
     """
     # Select model info based on task type
     models_dict = CLASSIFICATION_MODELS if is_classification else REGRESSION_MODELS
-    
-    # Get model info
     model_info = models_dict.get(model_name)
-    
     if model_info is None:
         raise ValueError(f"Model '{model_name}' not found")
     
@@ -118,56 +103,30 @@ def get_model_instance(model_name, is_classification=True):
     module = __import__(model_info["module"], fromlist=[model_info["model"]])
     model_class = getattr(module, model_info["model"])
     
-    # Create model instance
     return model_class()
 
 
 def train_model(X, y, model_name, is_classification=True, test_size=0.2, random_state=42, cv=5, use_grid_search=True):
     """
     Train a model on the given data.
-    
-    Parameters:
-    -----------
-    X : array-like
-        Feature matrix.
-    y : array-like
-        Target vector.
-    model_name : str
-        Name of the model to train.
-    is_classification : bool, default=True
-        Whether the task is classification or regression.
-    test_size : float, default=0.2
-        Proportion of data to use for testing.
-    random_state : int, default=42
-        Random state for reproducibility.
-    cv : int, default=5
-        Number of cross-validation folds.
-    use_grid_search : bool, default=True
-        Whether to use grid search for hyperparameter tuning.
-        
-    Returns:
-    --------
-    results : dict
-        Results of training, including the trained model, metrics, and predictions.
+    Returns a dict: the results of training, including the trained model, metrics, and predictions.
     """
-    # Split data into train and test sets
     X_train, X_test, y_train, y_test = train_test_split(
         X, y, test_size=test_size, random_state=random_state
     )
     
-    # Get model info
+    # get model info and instance
     models_dict = CLASSIFICATION_MODELS if is_classification else REGRESSION_MODELS
     model_info = models_dict.get(model_name)
     
     if model_info is None:
         raise ValueError(f"Model '{model_name}' not found")
     
-    # Get model instance
     model = get_model_instance(model_name, is_classification)
     
     # Train the model
     if use_grid_search and model_info["params"]:
-        # Use grid search for hyperparameter tuning
+        # use grid search for hyperparameter tuning
         grid_search = GridSearchCV(
             model, 
             model_info["params"], 
@@ -177,19 +136,19 @@ def train_model(X, y, model_name, is_classification=True, test_size=0.2, random_
         )
         grid_search.fit(X_train, y_train)
         
-        # Get best model
+        # get best model 
         best_model = grid_search.best_estimator_
         best_params = grid_search.best_params_
     else:
-        # Train model with default parameters
+        # train model with default parameters if no grid search is used
         best_model = model
         best_model.fit(X_train, y_train)
         best_params = {}
     
-    # Make predictions
+    # make predictions
     y_pred = best_model.predict(X_test)
     
-    # Calculate metrics
+    # calculate metrics
     if is_classification:
         metrics = {
             'accuracy': accuracy_score(y_test, y_pred),
@@ -240,22 +199,7 @@ def train_model(X, y, model_name, is_classification=True, test_size=0.2, random_
 def save_model(model, model_name, feature_names=None, target_encoder=None):
     """
     Save a trained model to disk.
-    
-    Parameters:
-    -----------
-    model : object
-        Trained model.
-    model_name : str
-        Name to give the saved model.
-    feature_names : list, optional
-        List of feature names.
-    target_encoder : object, optional
-        Target encoder for classification tasks.
-        
-    Returns:
-    --------
-    model_path : str
-        Path to the saved model.
+    Returns the path to the saved model.
     """
     # Create models directory if it doesn't exist
     if not os.path.exists("models/saved"):
@@ -278,16 +222,6 @@ def save_model(model, model_name, feature_names=None, target_encoder=None):
 def load_model(model_path):
     """
     Load a saved model from disk.
-    
-    Parameters:
-    -----------
-    model_path : str
-        Path to the saved model.
-        
-    Returns:
-    --------
-    model_info : dict
-        Dictionary containing the model and related information.
     """
     # Load model info
     model_info = joblib.load(model_path)

@@ -336,10 +336,9 @@ if st.session_state.dataset is not None:
         
         high_corr_pairs = check_high_correlations(st.session_state.dataset, st.session_state.original_features["numeric"])
         if high_corr_pairs:
-            st.warning("⚠️ High correlation detected between features:")
+            st.warning("⚠️ High correlation detected between features. Consider potential information leakage when selecting features and targets.")
             for feat1, feat2, corr in high_corr_pairs:
                 st.write(f"- '{feat1}' and '{feat2}' (correlation: {corr:.3f})")
-            st.write("Consider potential information leakage when selecting features and targets.")
             st.write("---")
         
         # Correlation matrix for numeric features
@@ -487,7 +486,99 @@ if st.session_state.dataset is not None:
             # Initialize data processor if not already done
             if st.session_state.data_processor is None:
                 st.session_state.data_processor = DataProcessor()
+
+            st.subheader("Data Preprocessing")
+            analysis = st.session_state.data_processor.analyze_data_characteristics(
+                st.session_state.dataset,
+                st.session_state.features["numeric"],
+                st.session_state.features["categorical"]
+            )
             
+            if analysis['has_outliers']:
+                st.warning("⚠️ Outliers detected in the following features: " + 
+                         ", ".join(analysis['outlier_features']))
+                st.info("💡 Suggestion: Consider using robust scaling and median imputation for better handling of outliers.")
+            
+            if analysis['missing_value_patterns']:
+                st.warning("⚠️ Missing values detected:")
+                if 'numeric' in analysis['missing_value_patterns']:
+                    st.write("Numeric features with missing values:")
+                    for feat, count in analysis['missing_value_patterns']['numeric']['features'].items():
+                        st.write(f"- {feat}: {count} missing values")
+                if 'categorical' in analysis['missing_value_patterns']:
+                    st.write("Categorical features with missing values:")
+                    for feat, count in analysis['missing_value_patterns']['categorical']['features'].items():
+                        st.write(f"- {feat}: {count} missing values")
+                
+            with st.expander("Configure Preprocessing", expanded=True):
+                col1, col2 = st.columns(2)
+                
+                with col1:
+                    st.subheader("Numeric Features")
+                    if st.session_state.features["numeric"]:
+                        suggested_num_imputer = analysis.get('suggested_strategies', {}).get('numeric_imputer', 'mean')
+                        num_imputer_options = {
+                            'mean': 'Mean (default)',
+                            'median': 'Median (robust to outliers)',
+                            'knn': 'K-Nearest Neighbors (for complex patterns)',
+                        }
+                        num_imputer = st.selectbox(
+                            "Missing Value Strategy:",
+                            options=list(num_imputer_options.keys()),
+                            format_func=lambda x: num_imputer_options[x],
+                            index=list(num_imputer_options.keys()).index(suggested_num_imputer),
+                            help="Strategy for handling missing values in numeric features"
+                        )
+
+                        suggested_scaler = analysis.get('suggested_strategies', {}).get('numeric_scaler', 'standard')
+                        scaler_options = {
+                            'standard': 'Standard Scaler (default)',
+                            'robust': 'Robust Scaler (handles outliers better)'
+                        }
+                        scaler_type = st.selectbox(
+                            "Scaling Method:",
+                            options=list(scaler_options.keys()),
+                            format_func=lambda x: scaler_options[x],
+                            index=list(scaler_options.keys()).index(suggested_scaler),
+                            help="Method for scaling numeric features"
+                        )
+                    else:
+                        st.info("No numeric features selected.")
+                
+                with col2:
+                    st.subheader("Categorical Features")
+                    if st.session_state.features["categorical"]:
+                        cat_imputer_options = {
+                            'most_frequent': 'Most Frequent (default)',
+                            'constant': 'Constant (specify value)'
+                        }
+                        cat_imputer = st.selectbox(
+                            "Missing Value Strategy:",
+                            options=list(cat_imputer_options.keys()),
+                            format_func=lambda x: cat_imputer_options[x],
+                            help="Strategy for handling missing values in categorical features"
+                        )
+                        
+                        if cat_imputer == 'constant':
+                            constant_value = st.text_input(
+                                "Constant Value:",
+                                value='missing',
+                                help="Value to use for filling missing categorical values"
+                            )
+                    else:
+                        st.info("No categorical features selected.")
+
+                if st.button("Apply Preprocessing Configuration"):
+                    config = {
+                        'numeric_imputer_strategy': num_imputer if st.session_state.features["numeric"] else 'mean',
+                        'categorical_imputer_strategy': cat_imputer if st.session_state.features["categorical"] else 'most_frequent',
+                        'numeric_scaler_type': scaler_type if st.session_state.features["numeric"] else 'standard'
+                    }
+                    st.session_state.data_processor.configure_preprocessing(config)
+                    st.success("Preprocessing configuration applied successfully!")
+                    
+            st.markdown("---")
+                    
             # Determine if classification or regression task
             if st.session_state.is_classification is None:
                 target_series = st.session_state.dataset[st.session_state.target]
@@ -538,13 +629,20 @@ if st.session_state.dataset is not None:
                     help="Proportion of data to use for testing"
                 )
                 st.session_state.training_tab_state["test_size"] = test_size
+
+                random_state_options = {
+                    "None (non-deterministic)": None,
+                    "0 (zero seed)": 0,
+                    "42 (common seed)": 42
+                }
                 
-                random_state = st.number_input(
-                    "Random State:",
-                    min_value=0,
-                    value=st.session_state.training_tab_state["random_state"],
-                    help="Seed for reproducibility"
+                random_state_selection= st.selectbox(
+                    "Seed for reproducibility (random_state)",
+                    options=list(random_state_options.keys()),
+                    index=2, #default is 42, most frequent seed
+                    help="Seed for reproducibility. Use None for non-deterministic behavior, or a fixed value for reproducible results."
                 )
+                random_state = random_state_options[random_state_selection]
                 st.session_state.training_tab_state["random_state"] = random_state
                 
                 use_grid_search = st.checkbox(
@@ -600,21 +698,36 @@ if st.session_state.dataset is not None:
                         # Store results in session state
                         st.session_state.trained_model = results['model']
                         st.session_state.model_results = results
-                        
-                        # Save the model
-                        save_model(
-                            results['model'],
-                            f"{selected_model}_{st.session_state.dataset_name}",
-                            feature_names=st.session_state.data_processor.get_feature_names(),
-                            target_encoder=st.session_state.data_processor.label_encoder
-                        )
-                        
+
                         st.success("Model trained successfully! Go to the Model Evaluation tab to see the results.")
-                    
+
+                        st.markdown("---")
+                        st.subheader("Save Model")
+                        save_col1, save_col2 = st.columns([2, 1])
+                        with save_col1:
+                            model_filename = st.text_input(
+                                "Model filename (without extension):",
+                                value=f"{selected_model}_{st.session_state.dataset_name}",
+                                help="Enter a name for your model file"
+                            )
+                        with save_col2:
+                            if st.button("Save Model", key="save_model_btn"):
+                                try:
+                                    save_model(
+                                        results['model'],
+                                        model_filename,
+                                        feature_names=st.session_state.data_processor.get_feature_names(),
+                                        target_encoder=st.session_state.data_processor.label_encoder
+                                    )
+                                    st.success(f"Model saved successfully as '{model_filename}'!")
+                                except Exception as e:
+                                    st.error(f"Error saving model: {str(e)}")
+                        
                     except Exception as e:
                         st.error(f"An error occurred during training: {str(e)}")
                         st.session_state.trained_model = None
                         st.session_state.model_results = None
+                        
     
     # Model Evaluation Tab
     with active_tab[4]:

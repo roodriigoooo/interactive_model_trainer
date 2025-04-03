@@ -3,8 +3,9 @@ Data processing utilities for the ML Model Trainer application.
 """
 import pandas as pd
 import numpy as np
-from sklearn.preprocessing import StandardScaler, OneHotEncoder, LabelEncoder
-from sklearn.impute import SimpleImputer
+from sklearn.preprocessing import StandardScaler, OneHotEncoder, LabelEncoder, RobustScaler
+from sklearn.impute import SimpleImputer, KNNImputer
+from scipy import stats
 
 class DataProcessor:
     """
@@ -17,39 +18,96 @@ class DataProcessor:
         self.categorical_encoder = None
         self.label_encoder = None
         self.feature_names = []
+        self.preprocessing_config = {
+            'numeric_imputer_strategy': 'mean',
+            'categorical_imputer_strategy': 'most_frequent',
+            'numeric_scaler_type': 'standard',
+            'handle_outliers': False
+        }
         
+    def analyze_data_characteristics(self, df, numeric_features, categorical_features):
+        """
+        Analyze dataset characteristics to suggest preprocessing strategies.
+        Analyze numeric features, check for outliers using basic IQR method, and do basic analysis on missing values. 
+        """
+        analysis = {
+            'has_outliers': False,
+            'missing_value_patterns': {},
+            'suggested_strategies': {}
+        }
+        
+        if numeric_features:
+            numeric_data = df[numeric_features]
+        
+            Q1 = numeric_data.quantile(0.25)
+            Q3 = numeric_data.quantile(0.75)
+            IQR = Q3 - Q1
+            outlier_mask = ((numeric_data < (Q1 - 1.5 * IQR)) | 
+                          (numeric_data > (Q3 + 1.5 * IQR)))
+            outlier_features = outlier_mask.any()
+            outlier_features = outlier_features[outlier_features].index.tolist()
+            
+            if outlier_features:
+                analysis['has_outliers'] = True
+                analysis['outlier_features'] = outlier_features
+                analysis['suggested_strategies']['numeric_scaler'] = 'robust'
+                analysis['suggested_strategies']['numeric_imputer'] = 'median'
+    
+            missing_stats = numeric_data.isnull().sum()
+            if missing_stats.any():
+                analysis['missing_value_patterns']['numeric'] = {
+                    'features': missing_stats[missing_stats > 0].to_dict(),
+                    'suggested_strategy': 'knn' if missing_stats.max() / len(df) < 0.2 else 'median'
+                }
+        
+        # Analyze categorical features
+        if categorical_features:
+            categorical_data = df[categorical_features]
+            missing_stats = categorical_data.isnull().sum()
+            if missing_stats.any():
+                analysis['missing_value_patterns']['categorical'] = {
+                    'features': missing_stats[missing_stats > 0].to_dict(),
+                    'suggested_strategy': 'most_frequent'
+                }
+        
+        return analysis
+    
+    def configure_preprocessing(self, config):
+        """
+        Configure preprocessing strategies.
+        """
+        self.preprocessing_config.update(config)
+    
     def preprocess_features(self, df, numeric_features, categorical_features, fit=True):
         """
         Preprocess features by imputing missing values, scaling numeric features,
-        and encoding categorical features.
-        
-        Parameters:
-        -----------
-        df : pandas.DataFrame
-            The dataframe containing the features.
-        numeric_features : list
-            List of numeric feature column names.
-        categorical_features : list
-            List of categorical feature column names.
-        fit : bool, default=True
-            Whether to fit the preprocessors on the data or just transform.
-            
-        Returns:
-        --------
-        X : numpy.ndarray
-            The preprocessed feature matrix.
+        and encoding categorical features, depending on the variable type.
         """
         # Initialize preprocessors if fitting
         if fit:
-            self.numeric_imputer = SimpleImputer(strategy='mean')
-            self.categorical_imputer = SimpleImputer(strategy='most_frequent')
-            self.numeric_scaler = StandardScaler()
+            # Configure numeric imputer based on strategy
+            if self.preprocessing_config['numeric_imputer_strategy'] == 'knn':
+                self.numeric_imputer = KNNImputer(n_neighbors=5)
+            else:
+                self.numeric_imputer = SimpleImputer(
+                    strategy=self.preprocessing_config['numeric_imputer_strategy']
+                )
+            
+            # Configure categorical imputer
+            self.categorical_imputer = SimpleImputer(
+                strategy=self.preprocessing_config['categorical_imputer_strategy']
+            )
+            
+            # Configure numeric scaler
+            if self.preprocessing_config['numeric_scaler_type'] == 'robust':
+                self.numeric_scaler = RobustScaler()
+            else:
+                self.numeric_scaler = StandardScaler()
+            
             self.categorical_encoder = OneHotEncoder(sparse_output=False, handle_unknown='ignore')
             
-        # Preprocess numeric features
+        # Preprocess numeric and categorical features
         numeric_data = df[numeric_features].copy() if numeric_features else pd.DataFrame()
-        
-        # Preprocess categorical features
         categorical_data = df[categorical_features].copy() if categorical_features else pd.DataFrame()
         
         # Process numeric features if present
@@ -90,18 +148,6 @@ class DataProcessor:
     def preprocess_target(self, series, fit=True):
         """
         Preprocess the target variable.
-        
-        Parameters:
-        -----------
-        series : pandas.Series
-            The target variable.
-        fit : bool, default=True
-            Whether to fit the encoder on the data or just transform.
-            
-        Returns:
-        --------
-        y : numpy.ndarray
-            The preprocessed target variable.
         """
         # For classification problems (if target is categorical)
         if series.dtype == 'object' or series.dtype.name == 'category' or series.nunique() < 10:
