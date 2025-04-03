@@ -334,18 +334,15 @@ if st.session_state.dataset is not None:
         st.markdown("---")
 
         st.subheader("📊 Dataset Overview")
-        overview_cols = st.columns(4)
-        with overview_cols[0]:
-            st.metric("Rows", st.session_state.dataset.shape[0])
-        with overview_cols[1]:
-            st.metric("Columns", st.session_state.dataset.shape[1])
-        with overview_cols[2]:
-            st.metric("Numeric Features", len(st.session_state.features["numeric"]))
-        with overview_cols[3]:
-            st.metric("Categorical Features", len(st.session_state.features["categorical"]))
+        overview_cols = st.columns(5)
+        overview_cols[0].metric("Rows", st.session_state.dataset.shape[0])
+        overview_cols[1].metric("Columns", st.session_state.dataset.shape[1])
+        overview_cols[2].metric("Numeric Features", len(st.session_state.features["numeric"]))
+        overview_cols[3].metric("Categorical Features", len(st.session_state.features["categorical"]))
+        overview_cols[4].metric("Memory Usage", f"{st.session_state.dataset.memory_usage(deep=True).sum()} bytes")
         
         # Create tabs for different dataset views
-        data_tabs = st.tabs(["Preview", "Summary Statistics", "Data Info"])
+        data_tabs = st.tabs(["Preview", "Summary Statistics"])
 
         with data_tabs[0]:
             st.subheader("Data Preview")
@@ -434,36 +431,6 @@ if st.session_state.dataset is not None:
                     st.dataframe(pd.DataFrame(cat_stats).T, use_container_width=True)
                 else:
                     st.info("No categorical features available.")
-
-        with data_tabs[2]:
-            st.subheader("Detailed Data Information")
-
-            buffer = StringIO()
-            st.session_state.dataset.info(buf=buffer)
-            info_str = buffer.getvalue()
-            
-            info_lines = info_str.split('\n')
-
-            memory_line = [line for line in info_lines if 'memory usage:' in line.lower()]
-            if memory_line:
-                st.metric("Memory Usage", memory_line[0].split(':')[1].strip())
-            
-            col_info = []
-            for line in info_lines:
-                if "#" in line and "non-null" in line:
-                    parts = line.strip().split()
-                    col_info.append({
-                        'Column': parts[-2],
-                        'Non-Null Count': parts[-3],
-                        'Type': parts[-1],
-                        'Missing Values': st.session_state.dataset.shape[0] - int(parts[-3].split()[0])
-                    })
-            
-            if col_info:
-                col_info_df = pd.DataFrame(col_info)
-                st.dataframe(col_info_df, use_container_width=True)
-            else:
-                st.info("No categorical features available.")
                     
             
     # Data Exploration Tab
@@ -722,154 +689,163 @@ if st.session_state.dataset is not None:
             st.markdown("---")
                     
             # Determine if classification or regression task
-            if st.session_state.is_classification is None:
-                target_series = st.session_state.dataset[st.session_state.target]
-                st.session_state.is_classification = (
-                    target_series.dtype == 'object' or 
-                    target_series.dtype.name == 'category' or 
-                    target_series.nunique() < 10
-                )
+            target_series = st.session_state.dataset[st.session_state.target]
+            st.session_state.is_classification = (
+                target_series.dtype == 'object' or 
+                target_series.dtype.name == 'category' or 
+                target_series.nunique() < 10
+            )
+
+            available_models = CLASSIFICATION_MODELS if st.session_state.is_classification else REGRESSION_MODELS
+
+            if "training_tab_state" not in st.session_state:
+                st.session_state.training_tab_state = {
+                    "selected_model": list(available_models.keys())[0],
+                    "test_size": 0.2,
+                    "random_state": 42,
+                    "use_grid_search": True,
+                    "cv_folds": 5
+                }
+            else:
+                if st.session_state.training_tab_state["selected_model"] not in available_models:
+                    st.session_state.training_tab_state["selected_model"] = list(available_models.keys())[0]
+
+            selected_model = st.selectbox("Select a model", 
+                         options=list(available_models.keys()), 
+                         key="training_tab_state.selected_model", 
+                         help="Choose a model for training")
             
-            # Create two columns for model selection and training parameters
-            col1, col2 = st.columns([1, 1])
+            st.session_state.training_tab_state["selected_model"] = selected_model
+            st.markdown(f"""
+            **Selected Model**: {selected_model}
             
-            with col1:
-                st.subheader("Model Selection")
-                
-                # Get available models based on task type
-                available_models = (
-                    CLASSIFICATION_MODELS if st.session_state.is_classification 
-                    else REGRESSION_MODELS
-                )
-                
-                # Model selection
-                selected_model = st.selectbox(
-                    "Select a model:",
-                    options=list(available_models.keys()),
-                    index=0 if st.session_state.training_tab_state["selected_model"] is None 
-                    else list(available_models.keys()).index(st.session_state.training_tab_state["selected_model"])
-                )
-                st.session_state.training_tab_state["selected_model"] = selected_model
-                
-                # Display model description
-                st.markdown(f"""
-                **Selected Model**: {selected_model}
-                
-                This model is suitable for {'classification' if st.session_state.is_classification else 'regression'} tasks.
-                """)
+            This model is suitable for {'classification' if st.session_state.is_classification else 'regression'} tasks.
+            """)
             
-            with col2:
-                st.subheader("Training Parameters")
+        
+            
+            st.subheader("Training Parameters")
                 
                 # Training parameters
-                test_size = st.slider(
-                    "Test Set Size:",
-                    min_value=0.1,
-                    max_value=0.4,
-                    value=st.session_state.training_tab_state["test_size"],
-                    step=0.05,
-                    help="Proportion of data to use for testing"
-                )
-                st.session_state.training_tab_state["test_size"] = test_size
+            test_size = st.slider(
+                "Test Set Size:",
+                min_value=0.1,
+                max_value=0.4,
+                value=st.session_state.training_tab_state["test_size"],
+                step=0.05,
+                help="Proportion of data to use for testing"
+            )
+            st.session_state.training_tab_state["test_size"] = test_size
 
-                random_state_options = {
-                    "None (non-deterministic)": None,
-                    "0 (zero seed)": 0,
-                    "42 (common seed)": 42
-                }
+            random_state_options = {
+                "None (non-deterministic)": None,
+                "0 (zero seed)": 0,
+                "42 (common seed)": 42
+            }
                 
-                random_state_selection= st.selectbox(
-                    "Seed for reproducibility (random_state)",
-                    options=list(random_state_options.keys()),
-                    index=2, #default is 42, most frequent seed
-                    help="Seed for reproducibility. Use None for non-deterministic behavior, or a fixed value for reproducible results."
+            random_state_selection= st.selectbox(
+                "Seed for reproducibility (random_state)",
+                options=list(random_state_options.keys()),
+                index=2, #default is 42, most frequent seed
+                help="Seed for reproducibility. Use None for non-deterministic behavior, or a fixed value for reproducible results."
+            )
+            random_state = random_state_options[random_state_selection]
+            st.session_state.training_tab_state["random_state"] = random_state
+                
+            use_grid_search = st.checkbox(
+                "Use Grid Search",
+                value=st.session_state.training_tab_state["use_grid_search"],
+                help="Enable hyperparameter tuning using grid search"
+            )
+            st.session_state.training_tab_state["use_grid_search"] = use_grid_search
+                
+            if use_grid_search:
+                cv_folds = st.slider(
+                    "Cross-validation Folds:",
+                    min_value=2,
+                    max_value=10,
+                    value=st.session_state.training_tab_state["cv_folds"],
+                    help="Number of folds for cross-validation"
                 )
-                random_state = random_state_options[random_state_selection]
-                st.session_state.training_tab_state["random_state"] = random_state
-                
-                use_grid_search = st.checkbox(
-                    "Use Grid Search",
-                    value=st.session_state.training_tab_state["use_grid_search"],
-                    help="Enable hyperparameter tuning using grid search"
-                )
-                st.session_state.training_tab_state["use_grid_search"] = use_grid_search
-                
-                if use_grid_search:
-                    cv_folds = st.slider(
-                        "Cross-validation Folds:",
-                        min_value=2,
-                        max_value=10,
-                        value=st.session_state.training_tab_state["cv_folds"],
-                        help="Number of folds for cross-validation"
-                    )
-                    st.session_state.training_tab_state["cv_folds"] = cv_folds
+                st.session_state.training_tab_state["cv_folds"] = cv_folds
             
             # Training button and progress
-            if st.button("Train Model", type="primary"):
-                with st.spinner("Training model..."):
-                    try:
+        if st.button("Train Model", type="primary"):
+            with st.spinner("Training model..."):
+                try:
                         # Prepare the data
-                        X = st.session_state.dataset[
-                            st.session_state.features["numeric"] + 
-                            st.session_state.features["categorical"]
-                        ]
-                        y = st.session_state.dataset[st.session_state.target]
+                    X = st.session_state.dataset[
+                        st.session_state.features["numeric"] + 
+                        st.session_state.features["categorical"]
+                    ]
+                    y = st.session_state.dataset[st.session_state.target]
                         
                         # Preprocess features
-                        X_processed = st.session_state.data_processor.preprocess_features(
-                            X,
-                            st.session_state.features["numeric"],
-                            st.session_state.features["categorical"]
-                        )
+                    X_processed = st.session_state.data_processor.preprocess_features(
+                        X,
+                        st.session_state.features["numeric"],
+                        st.session_state.features["categorical"]
+                    )
                         
                         # Preprocess target
-                        y_processed = st.session_state.data_processor.preprocess_target(y)
+                    y_processed = st.session_state.data_processor.preprocess_target(y)
                         
                         # Train the model
-                        results = train_model(
-                            X_processed,
-                            y_processed,
-                            selected_model,
-                            is_classification=st.session_state.is_classification,
-                            test_size=test_size,
-                            random_state=random_state,
-                            cv=cv_folds if use_grid_search else None,
-                            use_grid_search=use_grid_search
-                        )
+                    results = train_model(
+                        X_processed,
+                        y_processed,
+                        st.session_state.training_tab_state["selected_model"],
+                        is_classification=st.session_state.is_classification,
+                        test_size=st.session_state.training_tab_state["test_size"],
+                        random_state=st.session_state.training_tab_state["random_state"],
+                        cv=st.session_state.training_tab_state["cv_folds"] if st.session_state.training_tab_state["use_grid_search"] else None,
+                        use_grid_search=st.session_state.training_tab_state["use_grid_search"]
+                    )
                         
                         # Store results in session state
-                        st.session_state.trained_model = results['model']
-                        st.session_state.model_results = results
+                    st.session_state.trained_model = results['model']
+                    st.session_state.model_results = results
 
-                        st.success("Model trained successfully! Go to the Model Evaluation tab to see the results.")
+                    st.success("Model trained successfully! Go to the Model Evaluation tab to see the results.")
+                    if results['predictions']['y_prob'] is not None:
+                        st.subheader("ROC Curve")
+                        class_names = None
+                        if st.session_state.data_processor.label_encoder:
+                            class_names = list(st.session_state.data_processor.label_encoder.classes_)
 
-                        st.markdown("---")
-                        st.subheader("Save Model")
-                        save_col1, save_col2 = st.columns([2, 1])
-                        with save_col1:
-                            model_filename = st.text_input(
-                                "Model filename (without extension):",
-                                value=f"{selected_model}_{st.session_state.dataset_name}",
-                                help="Enter a name for your model file"
+                        fig = plot_roc_curve(
+                            results['predictions']['y_test'],
+                            results['predictions']['y_prob'],
+                            classes=class_names
+                        )
+                        st.pyplot(fig)
+                        
+                except Exception as e:
+                    st.error(f"An error occurred during training: {str(e)}")
+                    st.session_state.trained_model = None
+                    st.session_state.model_results = None
+                    
+                st.markdown("---")
+                st.subheader("Save Model")
+                save_col1, save_col2 = st.columns([2, 1])
+                with save_col1:
+                    model_filename = st.text_input(
+                        "Model filename (without extension):",
+                        value=f"{selected_model}_{st.session_state.dataset_name}",
+                        help="Enter a name for your model file"
+                    )
+                with save_col2:
+                    if st.button("Save Model", key="save_model_btn"):
+                        try:
+                            save_model(
+                                results['model'],
+                                model_filename,
+                                feature_names=st.session_state.data_processor.get_feature_names(),
+                                target_encoder=st.session_state.data_processor.label_encoder
                             )
-                        with save_col2:
-                            if st.button("Save Model", key="save_model_btn"):
-                                try:
-                                    save_model(
-                                        results['model'],
-                                        model_filename,
-                                        feature_names=st.session_state.data_processor.get_feature_names(),
-                                        target_encoder=st.session_state.data_processor.label_encoder
-                                    )
-                                    st.success(f"Model saved successfully as '{model_filename}'!")
-                                except Exception as e:
-                                    st.error(f"Error saving model: {str(e)}")
-                        
-                    except Exception as e:
-                        st.error(f"An error occurred during training: {str(e)}")
-                        st.session_state.trained_model = None
-                        st.session_state.model_results = None
-                        
+                            st.success(f"Model saved successfully as '{model_filename}'!")
+                        except Exception as e:
+                            st.error(f"Error saving model: {str(e)}")
     
     # Model Evaluation Tab
     with active_tab[4]:

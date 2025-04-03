@@ -233,28 +233,13 @@ def plot_roc_curve(y_true, y_prob, classes=None):
     fig, ax = plt.subplots(figsize=(8, 6))
     
     # For binary classification
-    if len(np.unique(y_true)) == 2:
-        fpr, tpr, _ = roc_curve(y_true, y_prob)
+    if y_prob.shape[1] == 2:
+        y_prob_binary = y_prob[:, 1]
+        fpr, tpr, _ = roc_curve(y_true, y_prob_binary)
         roc_auc = auc(fpr, tpr)
         
         ax.plot(fpr, tpr, lw=2, label=f'ROC curve (area = {roc_auc:.2f})')
         ax.plot([0, 1], [0, 1], 'k--', lw=2)
-        
-    # For multiclass classification
-    else:
-        # One-vs-Rest ROC curves for each class
-        for i, cls in enumerate(np.unique(y_true)):
-            # Convert to one-vs-rest
-            y_true_bin = (y_true == cls).astype(int)
-            
-            # Get class probabilities
-            y_prob_cls = y_prob[:, i]
-            
-            fpr, tpr, _ = roc_curve(y_true_bin, y_prob_cls)
-            roc_auc = auc(fpr, tpr)
-            
-            cls_name = classes[i] if classes else f'Class {cls}'
-            ax.plot(fpr, tpr, lw=2, label=f'{cls_name} (area = {roc_auc:.2f})')
     
     # Add labels and legend
     ax.set_xlabel('False Positive Rate')
