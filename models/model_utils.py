@@ -3,7 +3,7 @@ Model utilities for the ML Model Trainer application.
 """
 import numpy as np
 import pandas as pd
-from sklearn.model_selection import train_test_split, GridSearchCV, cross_val_score
+from sklearn.model_selection import train_test_split, GridSearchCV, RandomizedSearchCV, cross_val_score
 from sklearn.metrics import (
     accuracy_score, precision_score, recall_score, f1_score,
     mean_squared_error, mean_absolute_error, r2_score
@@ -17,38 +17,66 @@ CLASSIFICATION_MODELS = {
         "model": "LogisticRegression",
         "module": "sklearn.linear_model",
         "params": {
-            "C": [0.01, 0.1, 1.0, 10.0],
+            "C": [0.01, 0.1, 1.0, 10.0, 100.0],
             "penalty": ["l2"],
-            "solver": ["lbfgs"],
-            "max_iter": [1000]
+            "solver": ["lbfgs", "liblinear"],
+            "class_weight": [None, "balanced"]
         }
     },
     "Random Forest": {
         "model": "RandomForestClassifier",
         "module": "sklearn.ensemble",
         "params": {
-            "n_estimators": [50, 100, 200],
+            "n_estimators": [50, 100, 200, 300],
             "max_depth": [None, 10, 20, 30],
             "min_samples_split": [2, 5, 10],
-            "min_samples_leaf": [1, 2, 4]
+            "min_samples_leaf": [1, 2, 4],
+            "bootstrap": [True, False],
+            "class_weight": [None, "balanced", "balanced_subsample"]
         }
     },
     "Gradient Boosting": {
         "model": "GradientBoostingClassifier",
         "module": "sklearn.ensemble",
         "params": {
-            "n_estimators": [50, 100, 200],
-            "learning_rate": [0.01, 0.1, 0.2],
-            "max_depth": [3, 5, 7]
+            "n_estimators": [50, 100, 200, 300],
+            "learning_rate": [0.01, 0.05, 0.1, 0.2],
+            "max_depth": [3, 5, 7, 9],
+            "min_samples_split": [2, 5, 10],
+            "min_samples_leaf": [1, 2, 4]
         }
     },
     "Support Vector Machine": {
         "model": "SVC",
         "module": "sklearn.svm",
         "params": {
-            "C": [0.1, 1.0, 10.0],
-            "kernel": ["linear", "rbf"],
-            "probability": [True]
+            "C": [0.1, 1.0, 10.0, 100.0],
+            "kernel": ["linear", "rbf", "poly"],
+            "gamma": ["scale", "auto", 0.1, 0.01],
+            "probability": [True],
+            "class_weight": [None, "balanced"]
+        }
+    },
+    "K-Nearest Neighbors": {
+        "model": "KNeighborsClassifier",
+        "module": "sklearn.neighbors",
+        "params": {
+            "n_neighbors": [3, 5, 7, 9, 11],
+            "weights": ["uniform", "distance"],
+            "algorithm": ["auto", "ball_tree", "kd_tree", "brute"],
+            "leaf_size": [20, 30, 40],
+            "p": [1, 2]  # Manhattan or Euclidean
+        }
+    },
+    "Decision Tree": {
+        "model": "DecisionTreeClassifier",
+        "module": "sklearn.tree",
+        "params": {
+            "max_depth": [None, 5, 10, 15, 20],
+            "min_samples_split": [2, 5, 10],
+            "min_samples_leaf": [1, 2, 4],
+            "criterion": ["gini", "entropy"],
+            "class_weight": [None, "balanced"]
         }
     }
 }
@@ -57,33 +85,75 @@ REGRESSION_MODELS = {
     "Linear Regression": {
         "model": "LinearRegression",
         "module": "sklearn.linear_model",
-        "params": {}
+        "params": {
+            "fit_intercept": [True, False],
+            "normalize": [False, True],
+            "copy_X": [True],
+            "n_jobs": [None, -1]
+        }
     },
     "Ridge Regression": {
         "model": "Ridge",
         "module": "sklearn.linear_model",
         "params": {
-            "alpha": [0.01, 0.1, 1.0, 10.0],
-            "solver": ["auto"]
+            "alpha": [0.01, 0.1, 1.0, 10.0, 100.0],
+            "solver": ["auto", "svd", "cholesky", "lsqr", "sparse_cg", "sag", "saga"],
+            "fit_intercept": [True, False],
+            "normalize": [False, True]
+        }
+    },
+    "Lasso Regression": {
+        "model": "Lasso",
+        "module": "sklearn.linear_model",
+        "params": {
+            "alpha": [0.001, 0.01, 0.1, 1.0, 10.0],
+            "fit_intercept": [True, False],
+            "normalize": [False, True],
+            "selection": ["cyclic", "random"]
+        }
+    },
+    "ElasticNet": {
+        "model": "ElasticNet",
+        "module": "sklearn.linear_model",
+        "params": {
+            "alpha": [0.001, 0.01, 0.1, 1.0, 10.0],
+            "l1_ratio": [0.1, 0.3, 0.5, 0.7, 0.9],
+            "fit_intercept": [True, False],
+            "normalize": [False, True],
+            "selection": ["cyclic", "random"]
         }
     },
     "Random Forest Regressor": {
         "model": "RandomForestRegressor",
         "module": "sklearn.ensemble",
         "params": {
-            "n_estimators": [50, 100, 200],
+            "n_estimators": [50, 100, 200, 300],
             "max_depth": [None, 10, 20, 30],
             "min_samples_split": [2, 5, 10],
-            "min_samples_leaf": [1, 2, 4]
+            "min_samples_leaf": [1, 2, 4],
+            "bootstrap": [True, False]
         }
     },
     "Gradient Boosting Regressor": {
         "model": "GradientBoostingRegressor",
         "module": "sklearn.ensemble",
         "params": {
-            "n_estimators": [50, 100, 200],
-            "learning_rate": [0.01, 0.1, 0.2],
-            "max_depth": [3, 5, 7]
+            "n_estimators": [50, 100, 200, 300],
+            "learning_rate": [0.01, 0.05, 0.1, 0.2],
+            "max_depth": [3, 5, 7, 9],
+            "min_samples_split": [2, 5, 10],
+            "min_samples_leaf": [1, 2, 4],
+            "subsample": [0.8, 0.9, 1.0]
+        }
+    },
+    "SVR": {
+        "model": "SVR",
+        "module": "sklearn.svm",
+        "params": {
+            "C": [0.1, 1.0, 10.0, 100.0],
+            "kernel": ["linear", "rbf", "poly"],
+            "gamma": ["scale", "auto", 0.1, 0.01],
+            "epsilon": [0.1, 0.2, 0.5]
         }
     }
 }
@@ -91,7 +161,7 @@ REGRESSION_MODELS = {
 
 def get_model_instance(model_name, is_classification=True):
     """
-    Get an instance of the specified model.
+    get an instance of the specified model.
     """
     # Select model info based on task type
     models_dict = CLASSIFICATION_MODELS if is_classification else REGRESSION_MODELS
@@ -106,16 +176,35 @@ def get_model_instance(model_name, is_classification=True):
     return model_class()
 
 
-def train_model(X, y, model_name, is_classification=True, test_size=0.2, random_state=42, cv=5, use_grid_search=True):
+def get_param_grid(model_name, is_classification=True, custom_params=None):
     """
-    Train a model on the given data.
-    Returns a dict: the results of training, including the trained model, metrics, and predictions.
+    get the parameter grid for a model.
     """
+    # If custom params are provided, use those
+    if custom_params:
+        return custom_params
+        
+    # Otherwise use default params
+    models_dict = CLASSIFICATION_MODELS if is_classification else REGRESSION_MODELS
+    model_info = models_dict.get(model_name)
+    if model_info is None:
+        raise ValueError(f"Model '{model_name}' not found")
+    
+    return model_info["params"]
+
+
+def train_model(X, y, model_name, is_classification=True, test_size=0.2, random_state=42, 
+                cv=5, use_grid_search=True, use_randomized_search=False, n_iter=10,
+                custom_params=None, scoring=None):
+    """
+    train a model on the given data with flexible hyperparameter tuning.
+    """
+    # Split data
     X_train, X_test, y_train, y_test = train_test_split(
         X, y, test_size=test_size, random_state=random_state
     )
     
-    # get model info and instance
+    # Get model info and instance
     models_dict = CLASSIFICATION_MODELS if is_classification else REGRESSION_MODELS
     model_info = models_dict.get(model_name)
     
@@ -123,32 +212,54 @@ def train_model(X, y, model_name, is_classification=True, test_size=0.2, random_
         raise ValueError(f"Model '{model_name}' not found")
     
     model = get_model_instance(model_name, is_classification)
+    param_grid = get_param_grid(model_name, is_classification, custom_params)
+    
+    # Set default scoring if not provided
+    if scoring is None:
+        scoring = 'accuracy' if is_classification else 'neg_mean_squared_error'
     
     # Train the model
-    if use_grid_search and model_info["params"]:
-        # use grid search for hyperparameter tuning
-        grid_search = GridSearchCV(
-            model, 
-            model_info["params"], 
-            cv=cv, 
-            scoring='accuracy' if is_classification else 'neg_mean_squared_error',
-            n_jobs=-1
-        )
-        grid_search.fit(X_train, y_train)
+    if (use_grid_search or use_randomized_search) and param_grid:
+        # Choose search method
+        if use_randomized_search:
+            search = RandomizedSearchCV(
+                model, 
+                param_grid, 
+                n_iter=n_iter,
+                cv=cv, 
+                scoring=scoring,
+                n_jobs=-1,
+                random_state=random_state
+            )
+        else:
+            search = GridSearchCV(
+                model, 
+                param_grid, 
+                cv=cv, 
+                scoring=scoring,
+                n_jobs=-1
+            )
         
-        # get best model 
-        best_model = grid_search.best_estimator_
-        best_params = grid_search.best_params_
+        # Perform search
+        search.fit(X_train, y_train)
+        
+        # Get best model 
+        best_model = search.best_estimator_
+        best_params = search.best_params_
+        
+        # Get all results for parameter analysis
+        cv_results = pd.DataFrame(search.cv_results_)
     else:
-        # train model with default parameters if no grid search is used
+        # Train model with default parameters
         best_model = model
         best_model.fit(X_train, y_train)
         best_params = {}
+        cv_results = None
     
-    # make predictions
+    # Make predictions
     y_pred = best_model.predict(X_test)
     
-    # calculate metrics
+    # Calculate metrics
     if is_classification:
         metrics = {
             'accuracy': accuracy_score(y_test, y_pred),
@@ -157,7 +268,7 @@ def train_model(X, y, model_name, is_classification=True, test_size=0.2, random_
             'f1': f1_score(y_test, y_pred, average='weighted') if len(np.unique(y)) > 2 else f1_score(y_test, y_pred)
         }
         
-        # If model has predict_proba method, calculate probabilities
+        # Calculate probabilities if available
         if hasattr(best_model, 'predict_proba'):
             y_prob = best_model.predict_proba(X_test)
         else:
@@ -192,14 +303,14 @@ def train_model(X, y, model_name, is_classification=True, test_size=0.2, random_
             'y_pred': y_pred,
             'y_prob': y_prob
         },
-        'feature_importances': feature_importances
+        'feature_importances': feature_importances,
+        'cv_results': cv_results
     }
 
 
 def save_model(model, model_name, feature_names=None, target_encoder=None):
     """
-    Save a trained model to disk.
-    Returns the path to the saved model.
+    save a trained model to disk.
     """
     # Create models directory if it doesn't exist
     if not os.path.exists("models/saved"):
@@ -221,7 +332,7 @@ def save_model(model, model_name, feature_names=None, target_encoder=None):
 
 def load_model(model_path):
     """
-    Load a saved model from disk.
+    it would be nice to be able to load a saved model from disk.
     """
     # Load model info
     model_info = joblib.load(model_path)

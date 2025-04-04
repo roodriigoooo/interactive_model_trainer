@@ -4,4 +4,7 @@ numpy
 scikit-learn
 seaborn
 matplotlib
-joblib>
+joblib
+altair
+pytest
+plotly

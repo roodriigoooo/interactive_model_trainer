@@ -3,20 +3,41 @@ import pandas as pd
 import numpy as np
 import seaborn as sns
 import matplotlib.pyplot as plt
-from sklearn.preprocessing import StandardScaler, LabelEncoder
-import joblib
 import os
 from io import StringIO
 import json
 
-# Import utility functions
+from utils.app_utils import (
+    get_available_seaborn_datasets,
+    load_dataset,
+    save_session_state,
+    save_session_state,
+    load_session_state,
+    load_dataset,
+    check_high_correlations
+
+)
+
 from utils.visualizer import (
     plot_correlation_matrix,
     plot_categorical_distributions,
     plot_numeric_distributions,
     plot_confusion_matrix,
     plot_roc_curve,
-    plot_feature_importances
+    plot_feature_importances,
+)
+
+from utils.altair_visualizer import (
+    plot_correlation_matrix_alt,
+    plot_feature_importances_alt,
+    plot_distplot_alt,
+    plot_boxplot_alt,
+    plot_confusion_matrix_alt,
+    plot_roc_curve_alt,
+    plot_scatter_matrix_alt,
+    plot_categorical_distributions_alt,
+    plot_parameter_comparison_alt,
+    plot_model_comparison_alt
 )
 
 # Import model utilities
@@ -24,8 +45,9 @@ from models.model_utils import (
     CLASSIFICATION_MODELS,
     REGRESSION_MODELS,
     train_model,
-    save_model
+    save_model,
 )
+from models.model_history import ModelHistory
 
 # Import data processor
 from utils.data_processor import DataProcessor
@@ -97,6 +119,12 @@ if "training_tab_state" not in st.session_state:
         "use_grid_search": True,
         "cv_folds": 5
     }
+# Add visualization settings
+if "viz_settings" not in st.session_state:
+    st.session_state.viz_settings = {
+        "library": "altair",  # 'matplotlib' or 'altair'
+        "theme": "default"
+    }
 
 # App title and description
 st.title("Interactive ML Model Trainer")
@@ -105,142 +133,24 @@ This application allows you to train machine learning models interactively.
 Select a dataset, explore the data, choose features, and train various models to find the best one.
 """)
 
-# Helper functions
-def get_available_seaborn_datasets():
-    """Return a list of available datasets in seaborn."""
-    # Get all dataset names from seaborn
-    dataset_names = sns.get_dataset_names()
+# Add sidebar section for settings
+with st.sidebar:
+    st.header("Settings")
     
-    # Create a mapping from names to a function that will load that dataset
-    name_to_func = {name: name for name in dataset_names}
-    
-    # Convert names to prettier format for display
-    pretty_names = {name: name.replace('_', ' ').title() for name in dataset_names}
-    
-    # Create final mapping of pretty names to original names
-    return {pretty_names[name]: name for name in dataset_names}
+    # Visualization settings
+    st.subheader("Visualization")
+    viz_lib = st.radio(
+        "Visualization Library",
+        options=["Altair (Interactive)", "Matplotlib/Seaborn"],
+        index=0 if st.session_state.viz_settings["library"] == "altair" else 1,
+        help="Choose the visualization library. Altair provides interactive plots."
+    )
+    st.session_state.viz_settings["library"] = "altair" if viz_lib == "Altair (Interactive)" else "matplotlib"
 
-def identify_variable_types(df):
-    """Identify numeric and categorical variables in a dataframe."""
-    numeric_cols = df.select_dtypes(include=['int64', 'float64']).columns.tolist()
-    categorical_cols = df.select_dtypes(include=['object', 'category', 'bool']).columns.tolist()
     
-    # Some numeric columns with few unique values might be better treated as categorical
-    for col in numeric_cols.copy():
-        if df[col].nunique() < 10:  # Threshold for considering a numeric column as categorical
-            categorical_cols.append(col)
-            numeric_cols.remove(col)
-    
-    return numeric_cols, categorical_cols
+    st.markdown("---")
 
-def save_session_state():
-    """Save current session state to a file for persistence."""
-    state_to_save = {
-        "dataset_name": st.session_state.dataset_name,
-        "features": st.session_state.features,
-        "target": st.session_state.target,
-        "active_tab": st.session_state.active_tab
-    }
-    
-    if not os.path.exists(".streamlit/data"):
-        os.makedirs(".streamlit/data")
-    
-    with open(".streamlit/data/session_state.json", "w") as f:
-        json.dump(state_to_save, f)
 
-def load_session_state():
-    """Load session state from file if it exists."""
-    try:
-        if os.path.exists(".streamlit/data/session_state.json"):
-            with open(".streamlit/data/session_state.json", "r") as f:
-                saved_state = json.load(f)
-                
-            # Only restore if we don't already have a dataset loaded
-            if st.session_state.dataset is None:
-                for key, value in saved_state.items():
-                    if key in st.session_state:
-                        st.session_state[key] = value
-                
-                # If we have a dataset name, try to load that dataset
-                if st.session_state.dataset_name:
-                    try:
-                        load_dataset(st.session_state.dataset_name)
-                    except:
-                        pass  # If loading fails, we'll just start fresh
-    except:
-        # If loading fails for any reason, we'll just start fresh
-        pass
-
-def load_dataset(dataset_name):
-    """Load the selected dataset."""
-    # Reset model-related session state
-    st.session_state.target = None
-    st.session_state.trained_model = None
-    st.session_state.model_results = None
-    st.session_state.is_classification = None
-    st.session_state.data_processor = None
-    
-    if dataset_name == "Upload Custom Dataset":
-        if st.session_state.uploaded_dataset is not None:
-            st.session_state.dataset = st.session_state.uploaded_dataset
-            st.session_state.dataset_name = "Custom Dataset"
-    else:
-        # Get the original dataset name from the pretty name
-        name_to_func = get_available_seaborn_datasets()
-        dataset_name_original = name_to_func.get(dataset_name)
-        
-        if dataset_name_original:
-            # Load the dataset using seaborn's load_dataset function
-            st.session_state.dataset = sns.load_dataset(dataset_name_original)
-            st.session_state.dataset_name = dataset_name
-    
-    # If a dataset was successfully loaded, identify variable types
-    if st.session_state.dataset is not None:
-        numeric_cols, categorical_cols = identify_variable_types(st.session_state.dataset)
-        st.session_state.features = {"numeric": numeric_cols, "categorical": categorical_cols}
-        st.session_state.original_features = {
-            "numeric": numeric_cols.copy(),
-            "categorical": categorical_cols.copy()
-        }
-        # Save the current state
-        save_session_state()
-
-def check_high_correlations(df, numeric_features, threshold=0.95):
-    """
-    Check for highly correlated features in the dataset.
-    
-    Parameters:
-    -----------
-    df : pandas.DataFrame
-        The input dataset
-    numeric_features : list
-        List of numeric feature names
-    threshold : float, default=0.95
-        Correlation threshold to consider features as highly correlated
-    
-    Returns:
-    --------
-    list of tuples
-        List of (feature1, feature2, correlation) for highly correlated pairs
-    """
-    if len(numeric_features) < 2:
-        return []
-        
-    corr_matrix = df[numeric_features].corr().abs()
-    high_corr_pairs = []
-    
-    # Get upper triangle of correlation matrix
-    upper = corr_matrix.where(np.triu(np.ones(corr_matrix.shape), k=1).astype(bool))
-    
-    # Find feature pairs with correlation above threshold
-    for col in upper.columns:
-        high_corr = upper[col][upper[col] > threshold]
-        for idx, corr_value in high_corr.items():
-            high_corr_pairs.append((col, idx, corr_value))
-    
-    return high_corr_pairs
-
-# Sidebar for dataset selection
 with st.sidebar:
     st.header("Dataset Selection")
     
@@ -301,7 +211,7 @@ with st.sidebar:
 # Main area with tabs
 if st.session_state.dataset is not None:
     # Create tabs
-    tabs = ["Data Selection", "Data Exploration", "Feature Selection", "Model Training", "Model Evaluation"]
+    tabs = ["Data Selection", "Data Exploration", "Feature Selection", "Model Training", "Model Evaluation", "Model History"]
     active_tab = st.tabs(tabs)
     
     # Data Selection Tab
@@ -453,8 +363,50 @@ if st.session_state.dataset is not None:
         # Correlation matrix for numeric features
         if st.session_state.original_features["numeric"]:
             st.subheader("Correlation Matrix")
-            corr_fig = plot_correlation_matrix(st.session_state.dataset, st.session_state.original_features["numeric"])
-            st.pyplot(corr_fig)
+            
+            # Select visualization based on user preference
+            if st.session_state.viz_settings["library"] == "altair":
+                corr_chart = plot_correlation_matrix_alt(
+                    st.session_state.dataset[st.session_state.original_features["numeric"]]
+                )
+                st.altair_chart(corr_chart, use_container_width=True)
+            else:
+                corr_fig = plot_correlation_matrix(
+                    st.session_state.dataset, 
+                    st.session_state.original_features["numeric"]
+                )
+                st.pyplot(corr_fig)
+                
+            # Add scatter plot matrix for Altair
+            if st.session_state.viz_settings["library"] == "altair" and len(st.session_state.original_features["numeric"]) > 1:
+                st.subheader("Feature Relationships")
+                
+                # Allow selecting features to include
+                selected_features_scatter = st.multiselect(
+                    "Select features for scatter plot matrix:",
+                    options=st.session_state.original_features["numeric"],
+                    default=st.session_state.original_features["numeric"][:min(4, len(st.session_state.original_features["numeric"]))]
+                )
+                
+                if selected_features_scatter and len(selected_features_scatter) > 1:
+                    # Choose whether to color by target
+                    color_by = None
+                    if st.session_state.target and (
+                        st.session_state.dataset[st.session_state.target].nunique() <= 10 or 
+                        st.session_state.dataset[st.session_state.target].dtype == 'object' or
+                        st.session_state.dataset[st.session_state.target].dtype.name == 'category'
+                    ):
+                        color_by_target = st.checkbox("Color by target variable")
+                        if color_by_target:
+                            color_by = st.session_state.target
+                    
+                    # Create the chart
+                    scatter_matrix = plot_scatter_matrix_alt(
+                        st.session_state.dataset,
+                        selected_features_scatter,
+                        color_by=color_by
+                    )
+                    st.altair_chart(scatter_matrix, use_container_width=True)
         
         # Distribution of numeric features
         if st.session_state.original_features["numeric"]:
@@ -478,12 +430,42 @@ if st.session_state.dataset is not None:
                     if show_by_target:
                         target_var = st.session_state.target
                 
-                num_dist_fig = plot_numeric_distributions(
-                    st.session_state.dataset, 
-                    selected_numeric, 
-                    target=target_var if show_by_target else None
-                )
-                st.pyplot(num_dist_fig)
+                # Select visualization based on user preference
+                if st.session_state.viz_settings["library"] == "altair":
+                    # For Altair, we'll create one plot per feature
+                    for feature in selected_numeric:
+                        st.subheader(f"Distribution of {feature}")
+                        if show_by_target and target_var:
+                            # For categorical targets with few unique values, create multi-colored plot
+                            chart = plot_distplot_alt(
+                                st.session_state.dataset, 
+                                feature, 
+                                title=f"Distribution of {feature} by {target_var}"
+                            )
+                            st.altair_chart(chart, use_container_width=True)
+                            
+                            # Add boxplot by target
+                            box_chart = plot_boxplot_alt(
+                                st.session_state.dataset,
+                                feature,
+                                by=target_var
+                            )
+                            st.altair_chart(box_chart, use_container_width=True)
+                        else:
+                            # Simple distribution
+                            chart = plot_distplot_alt(
+                                st.session_state.dataset,
+                                feature
+                            )
+                            st.altair_chart(chart, use_container_width=True)
+                else:
+                    # Use matplotlib/seaborn
+                    num_dist_fig = plot_numeric_distributions(
+                        st.session_state.dataset, 
+                        selected_numeric, 
+                        target=target_var if show_by_target else None
+                    )
+                    st.pyplot(num_dist_fig)
         
         # Distribution of categorical features
         if st.session_state.original_features["categorical"]:
@@ -507,12 +489,26 @@ if st.session_state.dataset is not None:
                     if show_by_target:
                         target_var = st.session_state.target
                 
-                cat_dist_fig = plot_categorical_distributions(
-                    st.session_state.dataset, 
-                    selected_categorical, 
-                    target=target_var if show_by_target else None
-                )
-                st.pyplot(cat_dist_fig)
+                # Select visualization based on user preference
+                if st.session_state.viz_settings["library"] == "altair":
+                    # For Altair, we'll create one plot per feature
+                    charts = plot_categorical_distributions_alt(
+                        st.session_state.dataset,
+                        selected_categorical,
+                        target=target_var if show_by_target else None
+                    )
+                    
+                    # Display each chart
+                    for chart in charts:
+                        st.altair_chart(chart, use_container_width=True)
+                else:
+                    # Use matplotlib/seaborn
+                    cat_dist_fig = plot_categorical_distributions(
+                        st.session_state.dataset, 
+                        selected_categorical, 
+                        target=target_var if show_by_target else None
+                    )
+                    st.pyplot(cat_dist_fig)
     
     # Feature Selection Tab
     with active_tab[2]:
@@ -807,45 +803,47 @@ if st.session_state.dataset is not None:
                     st.session_state.model_results = results
 
                     st.success("Model trained successfully! Go to the Model Evaluation tab to see the results.")
-                    if results['predictions']['y_prob'] is not None:
-                        st.subheader("ROC Curve")
-                        class_names = None
-                        if st.session_state.data_processor.label_encoder:
-                            class_names = list(st.session_state.data_processor.label_encoder.classes_)
 
-                        fig = plot_roc_curve(
-                            results['predictions']['y_test'],
-                            results['predictions']['y_prob'],
-                            classes=class_names
+                    # Save to model history - moved to Model History tab. this avoids the model history tab to 'annoy' the user while working with separate models.
+                    st.session_state.latest_training_results = {
+                        'model_info': {
+                            'model_name': selected_model,
+                            'model_type': 'Classification' if st.session_state.is_classification else 'Regression'
+                        },
+                        'metrics': results['metrics'],
+                        'dataset_name': st.session_state.dataset_name,
+                        'features': st.session_state.features["numeric"] + st.session_state.features["categorical"],
+                        'target': st.session_state.target,
+                        'model_params': results['best_params']
+                    }
+
+                    st.markdown("---")
+                    st.subheader("Save Model")
+                    save_col1, save_col2 = st.columns([2, 1])
+                    with save_col1:
+                        model_filename = st.text_input(
+                            "Model filename (without extension):",
+                            value=f"{selected_model}_{st.session_state.dataset_name}",
+                            help="Enter a name for your model file"
                         )
-                        st.pyplot(fig)
-                        
+                    with save_col2:
+                        if st.button("Save Model", key="save_model_btn"):
+                            try:
+                                save_model(
+                                    results['model'],
+                                    model_filename,
+                                    feature_names=st.session_state.data_processor.get_feature_names(),
+                                    target_encoder=st.session_state.data_processor.label_encoder
+                                )
+                                st.success(f"Model saved successfully as '{model_filename}'!")
+                            except Exception as e:
+                                st.error(f"Error saving model: {str(e)}")
                 except Exception as e:
                     st.error(f"An error occurred during training: {str(e)}")
                     st.session_state.trained_model = None
                     st.session_state.model_results = None
                     
                 st.markdown("---")
-                st.subheader("Save Model")
-                save_col1, save_col2 = st.columns([2, 1])
-                with save_col1:
-                    model_filename = st.text_input(
-                        "Model filename (without extension):",
-                        value=f"{selected_model}_{st.session_state.dataset_name}",
-                        help="Enter a name for your model file"
-                    )
-                with save_col2:
-                    if st.button("Save Model", key="save_model_btn"):
-                        try:
-                            save_model(
-                                results['model'],
-                                model_filename,
-                                feature_names=st.session_state.data_processor.get_feature_names(),
-                                target_encoder=st.session_state.data_processor.label_encoder
-                            )
-                            st.success(f"Model saved successfully as '{model_filename}'!")
-                        except Exception as e:
-                            st.error(f"Error saving model: {str(e)}")
     
     # Model Evaluation Tab
     with active_tab[4]:
@@ -884,20 +882,52 @@ if st.session_state.dataset is not None:
                     # Plot confusion matrix if available
                     if results['predictions']['y_test'] is not None:
                         st.subheader("Confusion Matrix")
-                        fig = plot_confusion_matrix(
-                            results['predictions']['y_test'],
-                            results['predictions']['y_pred']
-                        )
-                        st.pyplot(fig)
+                        
+                        # Get class names if available
+                        class_names = None
+                        if st.session_state.data_processor and st.session_state.data_processor.label_encoder:
+                            class_names = list(st.session_state.data_processor.label_encoder.classes_)
+                        
+                        # Select visualization based on user preference
+                        if st.session_state.viz_settings["library"] == "altair":
+                            chart = plot_confusion_matrix_alt(
+                                results['predictions']['y_test'],
+                                results['predictions']['y_pred'],
+                                labels=class_names
+                            )
+                            st.altair_chart(chart, use_container_width=True)
+                        else:
+                            fig = plot_confusion_matrix(
+                                results['predictions']['y_test'],
+                                results['predictions']['y_pred'],
+                                class_names=class_names
+                            )
+                            st.pyplot(fig)
                     
                     # Plot ROC curve if probabilities are available
                     if results['predictions']['y_prob'] is not None:
                         st.subheader("ROC Curve")
-                        fig = plot_roc_curve(
-                            results['predictions']['y_test'],
-                            results['predictions']['y_prob']
-                        )
-                        st.pyplot(fig)
+                        
+                        # Get class names if available
+                        class_names = None
+                        if st.session_state.data_processor and st.session_state.data_processor.label_encoder:
+                            class_names = list(st.session_state.data_processor.label_encoder.classes_)
+                        
+                        # Select visualization based on user preference
+                        if st.session_state.viz_settings["library"] == "altair":
+                            chart = plot_roc_curve_alt(
+                                results['predictions']['y_test'],
+                                results['predictions']['y_prob'],
+                                classes=class_names
+                            )
+                            st.altair_chart(chart, use_container_width=True)
+                        else:
+                            fig = plot_roc_curve(
+                                results['predictions']['y_test'],
+                                results['predictions']['y_prob'],
+                                classes=class_names
+                            )
+                            st.pyplot(fig)
                 else:
                     metrics_df = pd.DataFrame({
                         'Metric': ['MSE', 'RMSE', 'MAE', 'R² Score'],
@@ -909,17 +939,71 @@ if st.session_state.dataset is not None:
                         ]
                     })
                     st.dataframe(metrics_df, use_container_width=True)
+                
+                # Parameter tuning results if available
+                if results['cv_results'] is not None:
+                    st.subheader("Hyperparameter Tuning Results")
+                    
+                    # Get parameter columns
+                    param_cols = [col for col in results['cv_results'].columns if col.startswith('param_')]
+                    
+                    if param_cols:
+                        # Allow user to select a parameter to visualize
+                        param_names = [col.replace('param_', '') for col in param_cols]
+                        selected_param = st.selectbox(
+                            "Select parameter to visualize:",
+                            options=param_names
+                        )
+                        param_col = f"param_{selected_param}"
+                        
+                        # Check if the parameter has multiple values
+                        if len(results['cv_results'][param_col].unique()) > 1:
+                            # Select visualization based on user preference
+                            if st.session_state.viz_settings["library"] == "altair":
+                                # Create a parameter effect visualization
+                                chart = plot_parameter_comparison_alt(
+                                    results['cv_results'],
+                                    param_col,
+                                    'mean_test_score',
+                                    title=f"Effect of {selected_param} on Model Performance"
+                                )
+                                st.altair_chart(chart, use_container_width=True)
+                            else:
+                                # Basic matplotlib chart
+                                fig, ax = plt.subplots(figsize=(10, 6))
+                                sns.lineplot(
+                                    x=param_col,
+                                    y='mean_test_score',
+                                    data=results['cv_results'],
+                                    marker='o',
+                                    ax=ax
+                                )
+                                plt.title(f"Effect of {selected_param} on Model Performance")
+                                plt.xlabel(selected_param)
+                                plt.ylabel('Mean Test Score')
+                                plt.grid(True)
+                                st.pyplot(fig)
+                        else:
+                            st.info(f"Parameter '{selected_param}' has only one value.")
             
             # Feature Importance Tab
             with eval_tabs[1]:
                 st.subheader("Feature Importance")
                 
                 if results['feature_importances'] is not None:
-                    fig = plot_feature_importances(
-                        results['feature_importances'],
-                        st.session_state.data_processor.get_feature_names()
-                    )
-                    st.pyplot(fig)
+                    # Select visualization based on user preference
+                    if st.session_state.viz_settings["library"] == "altair":
+                        chart = plot_feature_importances_alt(
+                            st.session_state.data_processor.get_feature_names(),
+                            results['feature_importances']
+                        )
+                        st.altair_chart(chart)
+                    else:
+                        fig = plot_feature_importances(
+                            results['feature_importances'],
+                            st.session_state.data_processor.get_feature_names()
+                        )
+                        st.pyplot(fig)
                 else:
                     st.info("Feature importance not available for this model.")
             
@@ -958,6 +1042,206 @@ if st.session_state.dataset is not None:
                     ax.set_ylabel('Predicted Values')
                     ax.set_title('Actual vs Predicted Values')
                     st.pyplot(fig)
+    
+    # Model History tab
+    with active_tab[5]:
+        st.header("📚 Model History")
+        
+        # Initialize model history if needed
+        if "model_history" not in st.session_state:
+            st.session_state.model_history = ModelHistory()
+        
+        # Check if there are new results to save
+        if "latest_training_results" in st.session_state and st.session_state.latest_training_results:
+            results = st.session_state.latest_training_results
+            
+            # Create a unique model name that includes features and parameters
+            feature_str = '+'.join(sorted(results['features']))[:30] + ('...' if len('+'.join(results['features'])) > 30 else '')
+            param_str = '+'.join(f"{k}={v}" for k, v in results['model_params'].items())[:30] + ('...' if len(str(results['model_params'])) > 30 else '')
+            timestamp = pd.Timestamp.now().strftime("%Y%m%d_%H%M%S")
+            
+            # Update model info with detailed information
+            results['model_info'].update({
+                'model_name': f"{results['model_info']['model_name']}_{timestamp}",
+                'features_used': feature_str,
+                'parameters': param_str,
+                'timestamp': timestamp
+            })
+            
+            st.session_state.model_history.add_model(
+                model_info=results['model_info'],
+                metrics=results['metrics'],
+                dataset_name=results['dataset_name'],
+                features=results['features'],
+                target=results['target'],
+                model_params=results['model_params']
+            )
+            # Clear the latest results after saving
+            st.session_state.latest_training_results = None
+        
+        # Get history
+        history_df = st.session_state.model_history.get_history(as_dataframe=True)
+        
+        if history_df.empty:
+            st.info("No models have been trained yet. Train a model in the Model Training tab to see history.")
+        else:
+            # Create a more detailed display DataFrame
+            display_df = history_df.copy()
+            
+            # Format timestamp if it exists
+            if 'timestamp' in display_df.columns:
+                # First try to convert all timestamps to datetime using a flexible parser
+                display_df['timestamp'] = pd.to_datetime(display_df['timestamp'])
+                # Then format them consistently
+                display_df['timestamp'] = display_df['timestamp'].dt.strftime('%Y-%m-%d %H:%M:%S')
+            
+            # Reorder and rename columns for better display
+            display_columns = {
+                'model_name': 'Model',
+                'timestamp': 'Trained At',
+                'dataset_name': 'Dataset',
+                'target': 'Target',
+                'features_used': 'Features',
+                'parameters': 'Parameters'
+            }
+            
+            # Add metric columns
+            metric_columns = [col for col in history_df.columns if col.startswith('metric_')]
+            for col in metric_columns:
+                display_columns[col] = col.replace('metric_', '').replace('_', ' ').title()
+            
+            # Select and rename columns that exist in the DataFrame
+            available_columns = [col for col in display_columns.keys() if col in display_df.columns]
+            display_df = display_df[available_columns]
+            display_df.columns = [display_columns[col] for col in available_columns]
+            
+            # Display history table
+            st.subheader("Training History")
+            st.dataframe(display_df, use_container_width=True)
+            
+            # Model comparison
+            st.subheader("Model Comparison")
+            
+            # Get metrics columns from original history_df
+            metric_columns = [col for col in history_df.columns if col.startswith('metric_')]
+            
+            if metric_columns:
+                col1, col2 = st.columns([2, 1])
+                
+                with col1:
+                    # Select metric for comparison
+                    selected_metric = st.selectbox(
+                        "Select metric for comparison:",
+                        options=metric_columns,
+                        format_func=lambda x: x.replace('metric_', '').capitalize()
+                    )
+                
+                with col2:
+                    # Add sorting option
+                    sort_order = st.selectbox(
+                        "Sort order:",
+                        options=["Descending", "Ascending"],
+                        index=0
+                    )
+                
+                # Filter options
+                with st.expander("Comparison Filters"):
+                    # Filter by model type (using base model name)
+                    model_names = history_df['model_name'].apply(lambda x: x.split('_')[0]).unique()
+                    selected_models = st.multiselect(
+                        "Filter by model type:",
+                        options=model_names,
+                        default=model_names
+                    )
+                    
+                    # Filter by dataset
+                    datasets = history_df['dataset_name'].unique()
+                    selected_datasets = st.multiselect(
+                        "Filter by dataset:",
+                        options=datasets,
+                        default=datasets
+                    )
+                    
+                    # Filter by target
+                    targets = history_df['target'].unique()
+                    selected_targets = st.multiselect(
+                        "Filter by target variable:",
+                        options=targets,
+                        default=targets
+                    )
+                
+                # Apply filters
+                filtered_df = history_df[
+                    (history_df['model_name'].apply(lambda x: x.split('_')[0]).isin(selected_models)) &
+                    (history_df['dataset_name'].isin(selected_datasets)) &
+                    (history_df['target'].isin(selected_targets))
+                ]
+                
+                if not filtered_df.empty:
+                    # Sort the DataFrame
+                    filtered_df = filtered_df.sort_values(
+                        by=selected_metric,
+                        ascending=(sort_order == "Ascending")
+                    )
+                    
+                    # Select visualization based on user preference
+                    if st.session_state.viz_settings["library"] == "altair":
+                        comparison_chart = plot_model_comparison_alt(
+                            filtered_df,
+                            selected_metric,
+                            title=f"Model Comparison by {selected_metric.replace('metric_', '').capitalize()}"
+                        )
+                        st.altair_chart(comparison_chart, use_container_width=True)
+                    else:
+                        # Basic matplotlib chart
+                        fig, ax = plt.subplots(figsize=(10, 6))
+                        # Create labels that include timestamp for uniqueness
+                        labels = [f"{row['model_name'].split('_')[0]}\n({pd.to_datetime(row['timestamp']).strftime('%H:%M:%S')})"
+                                for _, row in filtered_df.iterrows()]
+                        
+                        # Plot
+                        bars = ax.bar(range(len(filtered_df)), filtered_df[selected_metric])
+                        ax.set_xticks(range(len(filtered_df)))
+                        ax.set_xticklabels(labels, rotation=45, ha='right')
+                        ax.set_title(f"Model Comparison by {selected_metric.replace('metric_', '').capitalize()}")
+                        ax.set_ylabel(selected_metric.replace('metric_', '').capitalize())
+                        
+                        # Add value labels on top of bars
+                        for bar in bars:
+                            height = bar.get_height()
+                            ax.text(bar.get_x() + bar.get_width()/2., height,
+                                  f'{height:.3f}',
+                                  ha='center', va='bottom')
+                        
+                        plt.tight_layout()
+                        st.pyplot(fig)
+                else:
+                    st.warning("No models match the selected filters.")
+            
+            # Model deletion
+            st.subheader("Delete Model")
+            model_ids = filtered_df['model_id'].tolist() if 'filtered_df' in locals() else history_df['model_id'].tolist()
+            model_names = filtered_df['model_name'].tolist() if 'filtered_df' in locals() else history_df['model_name'].tolist()
+            timestamps = filtered_df['timestamp'].tolist() if 'filtered_df' in locals() else history_df['timestamp'].tolist()
+            
+            model_options = [f"{name.split('_')[0]} ({pd.to_datetime(ts).strftime('%Y-%m-%d %H:%M:%S')})" 
+                           for name, ts in zip(model_names, timestamps)]
+            
+            if model_options:
+                selected_model_idx = st.selectbox(
+                    "Select model to delete:",
+                    options=range(len(model_options)),
+                    format_func=lambda i: model_options[i]
+                )
+                
+                if st.button("Delete Selected Model", type="secondary"):
+                    model_id = model_ids[selected_model_idx]
+                    if st.session_state.model_history.delete_model(model_id):
+                        st.success("Model deleted successfully.")
+                        # Refresh history
+                        st.rerun()
+                    else:
+                        st.error("Failed to delete model.")
 else:
     st.info("👈 Please select a dataset from the sidebar to get started.")
 
