@@ -9,27 +9,41 @@ from sklearn.metrics import roc_curve, auc, confusion_matrix
 # Set Altair rendering options
 alt.data_transformers.disable_max_rows()
 
-def plot_feature_importances_alt(feature_names, importances, title="Feature Importances"):
+def plot_feature_importances_alt(feature_names, importances, title="Feature Importance"):
     """
     interactive feature importance visualization using Altair.
     """
-    # Create dataframe for visualization
+    # Create DataFrame
     importance_df = pd.DataFrame({
         'Feature': feature_names,
         'Importance': importances
-    }).sort_values('Importance', ascending=False)
+    })
     
-    # Create chart
+    # Sort by importance
+    importance_df = importance_df.sort_values('Importance', ascending=True)
+    
+    # Create the chart
     chart = alt.Chart(importance_df).mark_bar().encode(
-        x=alt.X('Importance:Q', title='Importance'),
-        y=alt.Y('Feature:N', sort='-x', title='Feature'),
-        tooltip=['Feature', 'Importance'],
-        color=alt.Color('Importance:Q', scale=alt.Scale(scheme='blues'), legend=None)
+        y=alt.Y('Feature:N', 
+                sort=None,  # Preserve the sorted order
+                axis=alt.Axis(
+                    labelLimit=200,  # Increase label length limit
+                    labelAngle=0,    # Keep labels horizontal
+                )),
+        x=alt.X('Importance:Q',
+                axis=alt.Axis(title='Importance')),
+        tooltip=['Feature', 'Importance']
     ).properties(
         title=title,
         width=600,
-        height=10 * len(feature_names) + 50
-    ).interactive()
+        height=max(300, len(feature_names) * 25)  # Dynamic height based on number of features
+    ).configure_axis(
+        labelFontSize=11,
+        titleFontSize=13
+    ).configure_title(
+        fontSize=14,
+        anchor='middle'
+    )
     
     return chart
 

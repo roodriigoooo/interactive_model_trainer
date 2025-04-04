@@ -11,11 +11,27 @@ from utils.app_utils import (
     get_available_seaborn_datasets,
     load_dataset,
     save_session_state,
-    save_session_state,
-    load_session_state,
-    load_dataset,
-    check_high_correlations
+    load_session_state
+)
 
+from utils.callbacks import (
+    initialize_session_state,
+    on_dataset_change,
+    on_target_change,
+    on_feature_selection,
+    on_preprocessing_config_change,
+    on_viz_settings_change,
+    on_model_train
+)
+
+from utils.fragments import (
+    render_dataset_overview,
+    render_data_preview,
+    render_feature_distributions,
+    render_model_metrics,
+    render_confusion_matrix,
+    render_roc_curve,
+    render_feature_importance
 )
 
 from utils.visualizer import (
@@ -89,42 +105,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # Initialize session state
-if "dataset" not in st.session_state:
-    st.session_state.dataset = None
-if "dataset_name" not in st.session_state:
-    st.session_state.dataset_name = None
-if "features" not in st.session_state:
-    st.session_state.features = {"numeric": [], "categorical": []}
-if "target" not in st.session_state:
-    st.session_state.target = None
-if "uploaded_dataset" not in st.session_state:
-    st.session_state.uploaded_dataset = None
-if "active_tab" not in st.session_state:
-    st.session_state.active_tab = "Data Selection"
-
-# Add new session state variables
-if "data_processor" not in st.session_state:
-    st.session_state.data_processor = None
-if "trained_model" not in st.session_state:
-    st.session_state.trained_model = None
-if "model_results" not in st.session_state:
-    st.session_state.model_results = None
-if "is_classification" not in st.session_state:
-    st.session_state.is_classification = None
-if "training_tab_state" not in st.session_state:
-    st.session_state.training_tab_state = {
-        "selected_model": None,
-        "test_size": 0.2,
-        "random_state": 42,
-        "use_grid_search": True,
-        "cv_folds": 5
-    }
-# Add visualization settings
-if "viz_settings" not in st.session_state:
-    st.session_state.viz_settings = {
-        "library": "altair",  # 'matplotlib' or 'altair'
-        "theme": "default"
-    }
+initialize_session_state()
 
 # App title and description
 st.title("Interactive ML Model Trainer")
@@ -139,17 +120,18 @@ with st.sidebar:
     
     # Visualization settings
     st.subheader("Visualization")
+    current_viz_lib = "Altair (Interactive)" if st.session_state.viz_settings["library"] == "altair" else "Matplotlib/Seaborn"
     viz_lib = st.radio(
         "Visualization Library",
         options=["Altair (Interactive)", "Matplotlib/Seaborn"],
-        index=0 if st.session_state.viz_settings["library"] == "altair" else 1,
-        help="Choose the visualization library. Altair provides interactive plots."
+        index=["Altair (Interactive)", "Matplotlib/Seaborn"].index(current_viz_lib),
+        help="Choose the visualization library. Altair provides interactive plots.",
+        key="viz_lib_radio",
+        on_change=on_viz_settings_change,
+        args=("altair",) if st.session_state.get("viz_lib_radio") == "Altair (Interactive)" else ("matplotlib",)
     )
-    st.session_state.viz_settings["library"] = "altair" if viz_lib == "Altair (Interactive)" else "matplotlib"
-
     
     st.markdown("---")
-
 
 with st.sidebar:
     st.header("Dataset Selection")
@@ -162,7 +144,9 @@ with st.sidebar:
     selected_dataset = st.selectbox(
         "Choose a dataset:",
         options=dataset_options,
-        index=0 if st.session_state.dataset_name is None else dataset_options.index(st.session_state.dataset_name) if st.session_state.dataset_name in dataset_options else 0
+        index=0 if st.session_state.dataset_name is None else dataset_options.index(st.session_state.dataset_name) if st.session_state.dataset_name in dataset_options else 0,
+        key="selected_dataset",
+        on_change=on_dataset_change
     )
     
     # Handle custom dataset upload
@@ -178,15 +162,13 @@ with st.sidebar:
             st.dataframe(df.head(5), use_container_width=True)
             
             if st.button("Use this dataset"):
-                load_dataset("Upload Custom Dataset")
+                on_dataset_change()
                 st.success("Custom dataset loaded successfully!")
-                st.session_state.active_tab = "Data Selection"
     else:
         # Button to load selected seaborn dataset
         if st.button("Load Dataset"):
-            load_dataset(selected_dataset)
+            on_dataset_change()
             st.success(f"{selected_dataset} dataset loaded successfully!")
-            st.session_state.active_tab = "Data Selection"
     
     # Display current dataset and target if selected
     if st.session_state.dataset is not None:
@@ -227,29 +209,20 @@ if st.session_state.dataset is not None:
                 "Select the target variable for your analysis:",
                 options=all_columns,
                 index=0 if st.session_state.target is None else all_columns.index(st.session_state.target) if st.session_state.target in all_columns else 0,
-                help="This is the variable you want to predict"
+                help="This is the variable you want to predict",
+                key="data_selection_target",
+                on_change=on_target_change
             )
         
         with col2:
-            if st.button("Set Target", type="primary"):
-                st.session_state.target = selected_target
-                # If target is in features, remove it
-                if selected_target in st.session_state.features["numeric"]:
-                    st.session_state.features["numeric"].remove(selected_target)
-                if selected_target in st.session_state.features["categorical"]:
-                    st.session_state.features["categorical"].remove(selected_target)
-                save_session_state()
+            if st.button("Set Target", type="primary", key="data_selection_set_target"):
+                on_target_change()
                 st.success(f"Target variable set to: {selected_target}")
                     
         st.markdown("---")
 
         st.subheader("📊 Dataset Overview")
-        overview_cols = st.columns(5)
-        overview_cols[0].metric("Rows", st.session_state.dataset.shape[0])
-        overview_cols[1].metric("Columns", st.session_state.dataset.shape[1])
-        overview_cols[2].metric("Numeric Features", len(st.session_state.features["numeric"]))
-        overview_cols[3].metric("Categorical Features", len(st.session_state.features["categorical"]))
-        overview_cols[4].metric("Memory Usage", f"{st.session_state.dataset.memory_usage(deep=True).sum()} bytes")
+        render_dataset_overview(st.session_state.dataset, st.session_state.features)
         
         # Create tabs for different dataset views
         data_tabs = st.tabs(["Preview", "Summary Statistics"])
@@ -263,25 +236,11 @@ if st.session_state.dataset is not None:
                 default=all_columns[:6] if len(all_columns) > 6 else all_columns
             )
 
-            if selected_columns:
-                preview_df = st.session_state.dataset[selected_columns].head(n_rows)
-                if len(selected_columns) == 1:
-                    preview_df = preview_df.to_frame()
-            else:
-                preview_df = st.session_state.dataset.head(n_rows)
-
-            def highlight_target(data):
-                if st.session_state.target:
-                    return pd.Series(
-                        ['background-color: rgba(75, 139, 245, 0.1)' if data.name == st.session_state.target else ''
-                         for _ in range(len(data))],
-                         index=data.index
-                    )
-                return pd.Series([''] * len(data), index=data.index)
-            
-            st.dataframe(
-                preview_df.style.apply(highlight_target),
-                use_container_width=True
+            render_data_preview(
+                st.session_state.dataset,
+                selected_columns,
+                n_rows,
+                st.session_state.target
             )
         
         with data_tabs[1]:
@@ -353,13 +312,6 @@ if st.session_state.dataset is not None:
                 "categorical": st.session_state.features["categorical"].copy()
             }
         
-        high_corr_pairs = check_high_correlations(st.session_state.dataset, st.session_state.original_features["numeric"])
-        if high_corr_pairs:
-            st.warning("⚠️ High correlation detected between features. Consider potential information leakage when selecting features and targets.")
-            for feat1, feat2, corr in high_corr_pairs:
-                st.write(f"- '{feat1}' and '{feat2}' (correlation: {corr:.3f})")
-            st.write("---")
-        
         # Correlation matrix for numeric features
         if st.session_state.original_features["numeric"]:
             st.subheader("Correlation Matrix")
@@ -419,53 +371,21 @@ if st.session_state.dataset is not None:
             )
             
             if selected_numeric:
-                # Add option to show distribution by target
+                # Check if target variable is suitable for distribution plots
                 show_by_target = False
-                target_var = None
-                
                 if (st.session_state.target and 
                     st.session_state.target in st.session_state.dataset.columns and 
                     st.session_state.dataset[st.session_state.target].nunique() <= 10):
-                    show_by_target = st.checkbox("Show distributions by target variable")
-                    if show_by_target:
-                        target_var = st.session_state.target
+                    show_by_target = st.checkbox("Show numeric distributions by target variable")
                 
-                # Select visualization based on user preference
-                if st.session_state.viz_settings["library"] == "altair":
-                    # For Altair, we'll create one plot per feature
-                    for feature in selected_numeric:
-                        st.subheader(f"Distribution of {feature}")
-                        if show_by_target and target_var:
-                            # For categorical targets with few unique values, create multi-colored plot
-                            chart = plot_distplot_alt(
-                                st.session_state.dataset, 
-                                feature, 
-                                title=f"Distribution of {feature} by {target_var}"
-                            )
-                            st.altair_chart(chart, use_container_width=True)
-                            
-                            # Add boxplot by target
-                            box_chart = plot_boxplot_alt(
-                                st.session_state.dataset,
-                                feature,
-                                by=target_var
-                            )
-                            st.altair_chart(box_chart, use_container_width=True)
-                        else:
-                            # Simple distribution
-                            chart = plot_distplot_alt(
-                                st.session_state.dataset,
-                                feature
-                            )
-                            st.altair_chart(chart, use_container_width=True)
-                else:
-                    # Use matplotlib/seaborn
-                    num_dist_fig = plot_numeric_distributions(
-                        st.session_state.dataset, 
-                        selected_numeric, 
-                        target=target_var if show_by_target else None
-                    )
-                    st.pyplot(num_dist_fig)
+                render_feature_distributions(
+                    st.session_state.dataset, 
+                    selected_numeric, 
+                    "numeric",
+                    st.session_state.target,
+                    st.session_state.viz_settings["library"],
+                    show_by_target
+                )
         
         # Distribution of categorical features
         if st.session_state.original_features["categorical"]:
@@ -478,37 +398,21 @@ if st.session_state.dataset is not None:
             )
             
             if selected_categorical:
-                # Add option to show distribution by target
+                # Check if target variable is suitable for distribution plots
                 show_by_target = False
-                target_var = None
-                
                 if (st.session_state.target and 
                     st.session_state.target in st.session_state.dataset.columns and 
                     st.session_state.dataset[st.session_state.target].nunique() <= 10):
                     show_by_target = st.checkbox("Show categorical distributions by target variable")
-                    if show_by_target:
-                        target_var = st.session_state.target
                 
-                # Select visualization based on user preference
-                if st.session_state.viz_settings["library"] == "altair":
-                    # For Altair, we'll create one plot per feature
-                    charts = plot_categorical_distributions_alt(
-                        st.session_state.dataset,
-                        selected_categorical,
-                        target=target_var if show_by_target else None
-                    )
-                    
-                    # Display each chart
-                    for chart in charts:
-                        st.altair_chart(chart, use_container_width=True)
-                else:
-                    # Use matplotlib/seaborn
-                    cat_dist_fig = plot_categorical_distributions(
-                        st.session_state.dataset, 
-                        selected_categorical, 
-                        target=target_var if show_by_target else None
-                    )
-                    st.pyplot(cat_dist_fig)
+                render_feature_distributions(
+                    st.session_state.dataset, 
+                    selected_categorical, 
+                    "categorical",
+                    st.session_state.target,
+                    st.session_state.viz_settings["library"],
+                    show_by_target
+                )
     
     # Feature Selection Tab
     with active_tab[2]:
@@ -522,9 +426,11 @@ if st.session_state.dataset is not None:
                 selected_numeric = st.multiselect(
                     "Select numeric features for modeling:",
                     options=st.session_state.original_features["numeric"],
-                    default=st.session_state.features["numeric"]
+                    default=st.session_state.features["numeric"],
+                    key="selected_numeric",
+                    on_change=on_feature_selection,
+                    args=("numeric",)
                 )
-                st.session_state.features["numeric"] = selected_numeric
             else:
                 st.info("No numeric features detected in this dataset.")
         
@@ -534,50 +440,52 @@ if st.session_state.dataset is not None:
                 selected_categorical = st.multiselect(
                     "Select categorical features for modeling:",
                     options=st.session_state.original_features["categorical"],
-                    default=st.session_state.features["categorical"]
+                    default=st.session_state.features["categorical"],
+                    key="selected_categorical",
+                    on_change=on_feature_selection,
+                    args=("categorical",)
                 )
-                st.session_state.features["categorical"] = selected_categorical
             else:
                 st.info("No categorical features detected in this dataset.")
         
         # Target variable selection
         all_columns = st.session_state.dataset.columns.tolist()
-        st.subheader("Target Variable")
-        selected_target = st.selectbox(
-            "Select the target variable:",
-            options=all_columns,
-            index=0 if st.session_state.target is None else all_columns.index(st.session_state.target) if st.session_state.target in all_columns else 0
-        )
-        
-        if st.button("Set as Target"):
-            st.session_state.target = selected_target
-            # If target is in features, remove it
-            if selected_target in st.session_state.features["numeric"]:
-                st.session_state.features["numeric"].remove(selected_target)
-            if selected_target in st.session_state.features["categorical"]:
-                st.session_state.features["categorical"].remove(selected_target)
-            save_session_state()
-            st.success(f"Target variable set to: {selected_target}")
-        
+        col1, col2 = st.columns([3,1])
+
+        with col1:
+            selected_target = st.selectbox(
+                "Select the target variable:",
+                options=all_columns,
+                index=0 if st.session_state.target is None else all_columns.index(st.session_state.target) if st.session_state.target in all_columns else 0,
+                help="This is the variable you want to predict",
+                key="feature_selection_target",
+                on_change=on_target_change
+            )
+
+        with col2:
+            if st.button("Set Target", type="primary", key="feature_selection_set_target"):
+                on_target_change()
+                st.success(f"Target variable set to: {selected_target}")
+
         if st.session_state.target:
             st.info(f"Current target variable: {st.session_state.target}")
-            
-            # Display correlation with target for numeric features
-            if st.session_state.features["numeric"] and st.session_state.target in st.session_state.dataset.columns:
-                if st.session_state.dataset[st.session_state.target].dtype in ['int64', 'float64']:
-                    st.subheader("Correlation with Target")
-                    
-                    # Calculate correlations
-                    corr_data = st.session_state.dataset[st.session_state.features["numeric"] + [st.session_state.target]]
-                    correlations = corr_data.corr()[st.session_state.target].sort_values(ascending=False)
-                    correlations = correlations.drop(st.session_state.target)
-                    
-                    # Plot correlations
-                    fig, ax = plt.subplots(figsize=(10, 6))
-                    correlations.plot(kind='bar', ax=ax)
-                    plt.title(f'Feature Correlation with {st.session_state.target}')
-                    plt.tight_layout()
-                    st.pyplot(fig)
+
+        # Display correlation with target for numeric features
+        if st.session_state.features["numeric"] and st.session_state.target in st.session_state.dataset.columns:
+            if st.session_state.dataset[st.session_state.target].dtype in ['int64', 'float64']:
+                st.subheader("Correlation with Target")
+                
+                # Calculate correlations
+                corr_data = st.session_state.dataset[st.session_state.features["numeric"] + [st.session_state.target]]
+                correlations = corr_data.corr()[st.session_state.target].sort_values(ascending=False)
+                correlations = correlations.drop(st.session_state.target)
+                
+                # Plot correlations
+                fig, ax = plt.subplots(figsize=(10, 6))
+                correlations.plot(kind='bar', ax=ax)
+                plt.title(f'Feature Correlation with {st.session_state.target}')
+                plt.tight_layout()
+                st.pyplot(fig)
     
     # Model Training Tab
     with active_tab[3]:
@@ -605,7 +513,7 @@ if st.session_state.dataset is not None:
                 st.info("💡 Suggestion: Consider using robust scaling and median imputation for better handling of outliers.")
             
             if analysis['missing_value_patterns']:
-                st.warning("⚠️ Missing values detected:")
+                st.warning("⚠️ Missing values detected")
                 if 'numeric' in analysis['missing_value_patterns']:
                     st.write("Numeric features with missing values:")
                     for feat, count in analysis['missing_value_patterns']['numeric']['features'].items():
@@ -679,7 +587,7 @@ if st.session_state.dataset is not None:
                         'categorical_imputer_strategy': cat_imputer if st.session_state.features["categorical"] else 'most_frequent',
                         'numeric_scaler_type': scaler_type if st.session_state.features["numeric"] else 'standard'
                     }
-                    st.session_state.data_processor.configure_preprocessing(config)
+                    on_preprocessing_config_change(config)
                     st.success("Preprocessing configuration applied successfully!")
                     
             st.markdown("---")
@@ -694,31 +602,20 @@ if st.session_state.dataset is not None:
 
             available_models = CLASSIFICATION_MODELS if st.session_state.is_classification else REGRESSION_MODELS
 
-            if "training_tab_state" not in st.session_state:
-                st.session_state.training_tab_state = {
-                    "selected_model": list(available_models.keys())[0],
-                    "test_size": 0.2,
-                    "random_state": 42,
-                    "use_grid_search": True,
-                    "cv_folds": 5
-                }
-            else:
-                if st.session_state.training_tab_state["selected_model"] not in available_models:
-                    st.session_state.training_tab_state["selected_model"] = list(available_models.keys())[0]
-
-            selected_model = st.selectbox("Select a model", 
+            selected_model = st.selectbox(
+                "Select a model", 
                          options=list(available_models.keys()), 
                          key="training_tab_state.selected_model", 
-                         help="Choose a model for training")
+                help="Choose a model for training",
+                on_change=on_model_train,
+                args=(lambda: st.session_state.selected_model, lambda: st.session_state.training_tab_state)
+            )
             
-            st.session_state.training_tab_state["selected_model"] = selected_model
             st.markdown(f"""
             **Selected Model**: {selected_model}
             
             This model is suitable for {'classification' if st.session_state.is_classification else 'regression'} tasks.
             """)
-            
-        
             
             st.subheader("Training Parameters")
                 
@@ -729,9 +626,10 @@ if st.session_state.dataset is not None:
                 max_value=0.4,
                 value=st.session_state.training_tab_state["test_size"],
                 step=0.05,
-                help="Proportion of data to use for testing"
+                help="Proportion of data to use for testing",
+                on_change=on_model_train,
+                args=(selected_model, lambda: {"test_size": st.session_state.test_size})
             )
-            st.session_state.training_tab_state["test_size"] = test_size
 
             random_state_options = {
                 "None (non-deterministic)": None,
@@ -739,21 +637,22 @@ if st.session_state.dataset is not None:
                 "42 (common seed)": 42
             }
                 
-            random_state_selection= st.selectbox(
+            random_state_selection = st.selectbox(
                 "Seed for reproducibility (random_state)",
                 options=list(random_state_options.keys()),
                 index=2, #default is 42, most frequent seed
-                help="Seed for reproducibility. Use None for non-deterministic behavior, or a fixed value for reproducible results."
+                help="Seed for reproducibility. Use None for non-deterministic behavior, or a fixed value for reproducible results.",
+                on_change=on_model_train,
+                args=(selected_model, lambda: {"random_state": random_state_options[st.session_state.random_state_selection]})
             )
-            random_state = random_state_options[random_state_selection]
-            st.session_state.training_tab_state["random_state"] = random_state
                 
             use_grid_search = st.checkbox(
                 "Use Grid Search",
                 value=st.session_state.training_tab_state["use_grid_search"],
-                help="Enable hyperparameter tuning using grid search"
+                help="Enable hyperparameter tuning using grid search",
+                on_change=on_model_train,
+                args=(selected_model, lambda: {"use_grid_search": st.session_state.use_grid_search})
             )
-            st.session_state.training_tab_state["use_grid_search"] = use_grid_search
                 
             if use_grid_search:
                 cv_folds = st.slider(
@@ -761,9 +660,10 @@ if st.session_state.dataset is not None:
                     min_value=2,
                     max_value=10,
                     value=st.session_state.training_tab_state["cv_folds"],
-                    help="Number of folds for cross-validation"
+                    help="Number of folds for cross-validation",
+                    on_change=on_model_train,
+                    args=(selected_model, lambda: {"cv_folds": st.session_state.cv_folds})
                 )
-                st.session_state.training_tab_state["cv_folds"] = cv_folds
             
             # Training button and progress
         if st.button("Train Model", type="primary"):
@@ -790,7 +690,7 @@ if st.session_state.dataset is not None:
                     results = train_model(
                         X_processed,
                         y_processed,
-                        st.session_state.training_tab_state["selected_model"],
+                            selected_model,
                         is_classification=st.session_state.is_classification,
                         test_size=st.session_state.training_tab_state["test_size"],
                         random_state=st.session_state.training_tab_state["random_state"],
@@ -804,46 +704,73 @@ if st.session_state.dataset is not None:
 
                     st.success("Model trained successfully! Go to the Model Evaluation tab to see the results.")
 
-                    # Save to model history - moved to Model History tab. this avoids the model history tab to 'annoy' the user while working with separate models.
+                        # Save to model history
                     st.session_state.latest_training_results = {
-                        'model_info': {
-                            'model_name': selected_model,
-                            'model_type': 'Classification' if st.session_state.is_classification else 'Regression'
-                        },
-                        'metrics': results['metrics'],
-                        'dataset_name': st.session_state.dataset_name,
-                        'features': st.session_state.features["numeric"] + st.session_state.features["categorical"],
-                        'target': st.session_state.target,
-                        'model_params': results['best_params']
-                    }
-
+                            'model_info': {
+                                'model_name': selected_model,
+                                'model_type': 'Classification' if st.session_state.is_classification else 'Regression'
+                            },
+                            'metrics': results['metrics'],
+                            'dataset_name': st.session_state.dataset_name,
+                            'features': st.session_state.features["numeric"] + st.session_state.features["categorical"],
+                            'target': st.session_state.target,
+                            'model_params': results['best_params']
+                        }
+                    
                     st.markdown("---")
                     st.subheader("Save Model")
+
                     save_col1, save_col2 = st.columns([2, 1])
                     with save_col1:
                         model_filename = st.text_input(
                             "Model filename (without extension):",
-                            value=f"{selected_model}_{st.session_state.dataset_name}",
-                            help="Enter a name for your model file"
-                        )
+                                value=f"{selected_model}_{st.session_state.dataset_name}".replace(" ", "_"),
+                                help="Enter a name for your model file",
+                                key="model_filename_input"
+                            )
                     with save_col2:
-                        if st.button("Save Model", key="save_model_btn"):
+                        if st.button("Save Model", key="save_model_btn", use_container_width=True):
                             try:
-                                save_model(
-                                    results['model'],
-                                    model_filename,
-                                    feature_names=st.session_state.data_processor.get_feature_names(),
-                                    target_encoder=st.session_state.data_processor.label_encoder
+                                st.write("Starting model save process...")  # Debug message
+                                    
+                                    # Verify model exists in results
+                                if 'model' not in results:
+                                    raise ValueError("No trained model found in results")
+                                    
+                                    # Get feature names
+                                feature_names = (
+                                    st.session_state.features["numeric"] + 
+                                    st.session_state.features["categorical"]
                                 )
-                                st.success(f"Model saved successfully as '{model_filename}'!")
+                                st.write(f"Feature names prepared: {len(feature_names)} features")  # Debug message
+                                    
+                                    # Save the model
+                                st.write("Attempting to save model...")  # Debug message
+                                model_path = save_model(
+                                    model=results['model'],
+                                    model_name=model_filename,
+                                    feature_names=feature_names,
+                                    target_encoder=st.session_state.data_processor.label_encoder if st.session_state.is_classification else None
+                                )
+                                    
+                                if os.path.exists(model_path):
+                                    st.success(f"Model saved successfully to: {model_path}")
+                                    st.write(f"File size: {os.path.getsize(model_path)} bytes")  # Debug message
+                                else:
+                                    st.error(f"Model file was not created at: {model_path}")
+                                    
                             except Exception as e:
                                 st.error(f"Error saving model: {str(e)}")
+                                st.error("Please check the console for detailed error information.")
+                                import traceback
+                                st.write("Detailed error:")
+                                st.code(traceback.format_exc())
                 except Exception as e:
                     st.error(f"An error occurred during training: {str(e)}")
                     st.session_state.trained_model = None
                     st.session_state.model_results = None
-                    
-                st.markdown("---")
+                        
+                    st.markdown("---")
     
     # Model Evaluation Tab
     with active_tab[4]:
@@ -866,95 +793,51 @@ if st.session_state.dataset is not None:
             with eval_tabs[0]:
                 st.subheader("Model Performance Metrics")
                 
-                # Display metrics based on task type
-                if st.session_state.is_classification:
-                    metrics_df = pd.DataFrame({
-                        'Metric': ['Accuracy', 'Precision', 'Recall', 'F1 Score'],
-                        'Value': [
-                            results['metrics']['accuracy'],
-                            results['metrics']['precision'],
-                            results['metrics']['recall'],
-                            results['metrics']['f1']
-                        ]
-                    })
-                    st.dataframe(metrics_df, use_container_width=True)
+                # Display metrics
+                render_model_metrics(results['metrics'], st.session_state.is_classification)
                     
                     # Plot confusion matrix if available
-                    if results['predictions']['y_test'] is not None:
+                if st.session_state.is_classification and results['predictions']['y_test'] is not None:
                         st.subheader("Confusion Matrix")
-                        
-                        # Get class names if available
+                    
+                    # Get class names if available
                         class_names = None
                         if st.session_state.data_processor and st.session_state.data_processor.label_encoder:
                             class_names = list(st.session_state.data_processor.label_encoder.classes_)
-                        
-                        # Select visualization based on user preference
-                        if st.session_state.viz_settings["library"] == "altair":
-                            chart = plot_confusion_matrix_alt(
-                                results['predictions']['y_test'],
-                                results['predictions']['y_pred'],
-                                labels=class_names
+                    
+                        render_confusion_matrix(
+                            results['predictions']['y_test'],
+                            results['predictions']['y_pred'],
+                            class_names,
+                            st.session_state.viz_settings["library"]
                             )
-                            st.altair_chart(chart, use_container_width=True)
-                        else:
-                            fig = plot_confusion_matrix(
-                                results['predictions']['y_test'],
-                                results['predictions']['y_pred'],
-                                class_names=class_names
-                            )
-                            st.pyplot(fig)
                     
                     # Plot ROC curve if probabilities are available
-                    if results['predictions']['y_prob'] is not None:
-                        st.subheader("ROC Curve")
+                        if results['predictions']['y_prob'] is not None:
+                            st.subheader("ROC Curve")
                         
-                        # Get class names if available
-                        class_names = None
-                        if st.session_state.data_processor and st.session_state.data_processor.label_encoder:
-                            class_names = list(st.session_state.data_processor.label_encoder.classes_)
-                        
-                        # Select visualization based on user preference
-                        if st.session_state.viz_settings["library"] == "altair":
-                            chart = plot_roc_curve_alt(
+                            render_roc_curve(
                                 results['predictions']['y_test'],
                                 results['predictions']['y_prob'],
-                                classes=class_names
+                                class_names,
+                                st.session_state.viz_settings["library"]
                             )
-                            st.altair_chart(chart, use_container_width=True)
-                        else:
-                            fig = plot_roc_curve(
-                                results['predictions']['y_test'],
-                                results['predictions']['y_prob'],
-                                classes=class_names
-                            )
-                            st.pyplot(fig)
-                else:
-                    metrics_df = pd.DataFrame({
-                        'Metric': ['MSE', 'RMSE', 'MAE', 'R² Score'],
-                        'Value': [
-                            results['metrics']['mse'],
-                            results['metrics']['rmse'],
-                            results['metrics']['mae'],
-                            results['metrics']['r2']
-                        ]
-                    })
-                    st.dataframe(metrics_df, use_container_width=True)
                 
                 # Parameter tuning results if available
-                if results['cv_results'] is not None:
-                    st.subheader("Hyperparameter Tuning Results")
+                        if results['cv_results'] is not None:
+                            st.subheader("Hyperparameter Tuning Results")
                     
                     # Get parameter columns
-                    param_cols = [col for col in results['cv_results'].columns if col.startswith('param_')]
+                            param_cols = [col for col in results['cv_results'].columns if col.startswith('param_')]
                     
-                    if param_cols:
+                            if param_cols:
                         # Allow user to select a parameter to visualize
-                        param_names = [col.replace('param_', '') for col in param_cols]
-                        selected_param = st.selectbox(
-                            "Select parameter to visualize:",
-                            options=param_names
-                        )
-                        param_col = f"param_{selected_param}"
+                                param_names = [col.replace('param_', '') for col in param_cols]
+                                selected_param = st.selectbox(
+                                    "Select parameter to visualize:",
+                                    options=param_names
+                                )
+                                param_col = f"param_{selected_param}"
                         
                         # Check if the parameter has multiple values
                         if len(results['cv_results'][param_col].unique()) > 1:
@@ -982,28 +865,20 @@ if st.session_state.dataset is not None:
                                 plt.xlabel(selected_param)
                                 plt.ylabel('Mean Test Score')
                                 plt.grid(True)
-                                st.pyplot(fig)
-                        else:
-                            st.info(f"Parameter '{selected_param}' has only one value.")
+                        st.pyplot(fig)
+                else:
+                        st.info(f"Parameter '{selected_param}' has only one value.")
             
             # Feature Importance Tab
             with eval_tabs[1]:
                 st.subheader("Feature Importance")
                 
                 if results['feature_importances'] is not None:
-                    # Select visualization based on user preference
-                    if st.session_state.viz_settings["library"] == "altair":
-                        chart = plot_feature_importances_alt(
-                            st.session_state.data_processor.get_feature_names(),
-                            results['feature_importances']
-                        )
-                        st.altair_chart(chart)
-                    else:
-                        fig = plot_feature_importances(
-                            results['feature_importances'],
-                            st.session_state.data_processor.get_feature_names()
-                        )
-                        st.pyplot(fig)
+                    render_feature_importance(
+                        st.session_state.data_processor.get_feature_names(),
+                        results['feature_importances'],
+                        st.session_state.viz_settings["library"]
+                    )
                 else:
                     st.info("Feature importance not available for this model.")
             

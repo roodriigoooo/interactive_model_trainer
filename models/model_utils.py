@@ -8,8 +8,9 @@ from sklearn.metrics import (
     accuracy_score, precision_score, recall_score, f1_score,
     mean_squared_error, mean_absolute_error, r2_score
 )
-import joblib
 import os
+import pickle
+from datetime import datetime
 
 # Dictionary of available models
 CLASSIFICATION_MODELS = {
@@ -312,29 +313,46 @@ def save_model(model, model_name, feature_names=None, target_encoder=None):
     """
     save a trained model to disk.
     """
-    # Create models directory if it doesn't exist
-    if not os.path.exists("models/saved"):
-        os.makedirs("models/saved")
-    
-    # Create model info dictionary
-    model_info = {
-        'model': model,
-        'feature_names': feature_names,
-        'target_encoder': target_encoder
-    }
-    
-    # Save model info
-    model_path = f"models/saved/{model_name}.joblib"
-    joblib.dump(model_info, model_path)
-    
-    return model_path
+    try:
+        # Get absolute path for models directory
+        current_dir = os.getcwd()
+        models_dir = os.path.join(current_dir, "models")
+        saved_dir = os.path.join(models_dir, "saved")
+        
+        # Create directories if they don't exist
+        os.makedirs(models_dir, exist_ok=True)
+        os.makedirs(saved_dir, exist_ok=True)
+        
+        # Create model info dictionary
+        model_info = {
+            'model': model,
+            'feature_names': feature_names,
+            'target_encoder': target_encoder,
+            'timestamp': datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        }
+        
+        # Create full path for the model file
+        model_path = os.path.join(saved_dir, f"{model_name}.pkl")
+        
+        # Save model info using pickle
+        with open(model_path, 'wb') as f:
+            pickle.dump(model_info, f)
+        
+        print(f"Model saved successfully to: {model_path}")  # Debug print
+        return model_path
+        
+    except Exception as e:
+        print(f"Error while saving model: {str(e)}")  # Debug print
+        raise Exception(f"Failed to save model: {str(e)}")
 
 
 def load_model(model_path):
     """
     it would be nice to be able to load a saved model from disk.
     """
-    # Load model info
-    model_info = joblib.load(model_path)
-    
-    return model_info 
+    try:
+        with open(model_path, 'rb') as f:
+            model_info = pickle.load(f)
+        return model_info
+    except Exception as e:
+        raise Exception(f"Failed to load model: {str(e)}") 

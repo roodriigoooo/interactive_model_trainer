@@ -80,7 +80,7 @@ class DataProcessor:
     
     def preprocess_features(self, df, numeric_features, categorical_features, fit=True):
         """
-        Preprocess features by imputing missing values, scaling numeric features,
+        preprocess features by imputing missing values, scaling numeric features,
         and encoding categorical features, depending on the variable type.
         """
         # Initialize preprocessors if fitting
